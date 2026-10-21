@@ -481,3 +481,16 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 28px; outline: none
 }
 .timerbar:not([hidden]) ~ .toast { bottom: calc(154px + env(safe-area-inset-bottom)); }
 @media (min-width: 761px) { .timerbar:not([hidden]) ~ .toast { bottom: 84px; } }
+
+/* Cours de l'université */
+.ev-box.is-ecole, .ev-block.is-ecole, .wev.is-ecole {
+  background: linear-gradient(135deg, rgba(60, 240, 255, .1), rgba(155, 107, 255, .08)); border: 1px solid rgba(60, 240, 255, .35); color: var(--ink);
+}
+.ev-block.is-ecole { box-shadow: inset 3px 0 0 var(--cyan); }
+.ev-box.is-ecole { box-shadow: inset 3px 0 0 var(--cyan), 0 0 22px -14px var(--cyan); }
+.ev-box > span:first-child { min-width: 0; }
+.ev-tag { display: inline-block; margin-right: 8px; padding: 1px 6px; border-radius: 5px; font: normal 700 .6rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: #07060D; background: var(--cyan); vertical-align: 2px; }
+.ev-info { display: block; margin-top: 2px; font: 500 .72rem var(--mono); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-block .ev-info { font-size: .66rem; }
+.agenda-row > * { min-width: 0; }
+.ev-box { flex-wrap: wrap; row-gap: 2px; }

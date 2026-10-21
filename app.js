@@ -168,6 +168,10 @@
     return task;
   }
 
+  /* Cours de l'université : salle et enseignant en sous-titre */
+  function evCls(e) { return e.source === 'outlook' ? ' is-outlook' : (e.source === 'ecole' ? ' is-ecole' : ''); }
+  function evInfo(e) { return e.source === 'ecole' ? [e.salle ? 'Salle ' + e.salle : '', e.prof || ''].filter(Boolean).join(', ') : ''; }
+
   /* Calculs du jour */
   function events(day) {
     return (S.evenements || []).filter(function (e) { return e.debut && C.ymd(new Date(e.debut)) === day; })
@@ -411,7 +415,7 @@
     var rows = [];
     evs.forEach(function (e) {
       var s = new Date(e.debut), f = new Date(e.fin);
-      rows.push({ m: e.journee ? -1 : s.getHours() * 60 + s.getMinutes(), html: '<div class="agenda-row ev"><span class="t">' + (e.journee ? 'Journée' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes())) + '</span><div class="ev-box' + (e.source === 'outlook' ? ' is-outlook' : '') + '"><span>' + esc(e.titre) + '</span><span class="ev-end">' + (e.journee ? '' : 'jusqu\'à ' + C.pad(f.getHours()) + ':' + C.pad(f.getMinutes())) + '</span></div></div>' });
+      rows.push({ m: e.journee ? -1 : s.getHours() * 60 + s.getMinutes(), html: '<div class="agenda-row ev"><span class="t">' + (e.journee ? 'Journée' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes())) + '</span><div class="ev-box' + evCls(e) + '"><span>' + (e.source === 'ecole' ? '<i class="ev-tag">Cours</i>' : '') + esc(e.titre) + (evInfo(e) ? '<small class="ev-info">' + esc(evInfo(e)) + '</small>' : '') + '</span><span class="ev-end">' + (e.journee ? '' : 'jusqu\'à ' + C.pad(f.getHours()) + ':' + C.pad(f.getMinutes())) + '</span></div></div>' });
     });
     if (!weekend && p.midi_debut) rows.push({ m: C.toMin(p.midi_debut), html: '<div class="agenda-row"><span class="t">' + esc(p.midi_debut) + '</span><div class="protect">Midi protégé jusqu\'à ' + esc(p.midi_fin) + '</div></div>' });
     tasks.forEach(function (t) { rows.push({ m: t.debut ? C.toMin(t.debut) : 2000, html: '<div class="agenda-row"><span class="t">' + (t.debut ? esc(t.debut) : 'Sans heure') + '</span>' + strip(t, { check: t.statut !== 'Fait' }) + '</div>' }); });
@@ -516,7 +520,7 @@
     events(d).forEach(function (e) {
       if (e.journee) return;
       var s = new Date(e.debut), f = new Date(e.fin), a = s.getHours() * 60 + s.getMinutes(), b = f.getHours() * 60 + f.getMinutes();
-      h += '<div class="ev-block' + (e.source === 'outlook' ? ' is-outlook' : '') + '" style="top:' + yOf(a) + 'px;height:' + Math.max(18, yOf(b) - yOf(a)) + 'px"><span>' + esc(e.titre) + '</span></div>';
+      h += '<div class="ev-block' + evCls(e) + '" style="top:' + yOf(a) + 'px;height:' + Math.max(18, yOf(b) - yOf(a)) + 'px" title="' + esc(e.titre + (evInfo(e) ? ', ' + evInfo(e) : '')) + '"><span>' + esc(e.titre) + '</span>' + (evInfo(e) ? '<small class="ev-info">' + esc(evInfo(e)) + '</small>' : '') + '</div>';
     });
     freeOf(d).forEach(function (f) {
       if (f[1] - f[0] < 15) return;
@@ -561,7 +565,7 @@
       var d = C.addDays(mon, i), L = dayLoad(d), pct = L.cap ? Math.min(100, Math.round(L.charge / L.cap * 100)) : 0;
       h += '<div class="wday' + (d === today() ? ' is-today' : '') + '" data-drop="day" data-day="' + d + '"><div class="wday-head"><button class="link" data-act="openday" data-day="' + d + '">' + esc(cap1(C.shortDate(d))) + '</button><span class="muted">' + (L.cap ? C.fmtDur(L.charge) + ' sur ' + C.fmtDur(L.cap) : '') + '</span></div>' +
         (L.cap ? '<div class="gauge sm' + (L.charge > L.cap ? ' is-over' : '') + '"><div class="gauge-fill" style="width:' + pct + '%"></div></div>' : '');
-      events(d).forEach(function (e) { var s = new Date(e.debut); h += '<div class="wev' + (e.source === 'outlook' ? ' is-outlook' : '') + '">' + (e.journee ? '' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes()) + ' ') + esc(e.titre) + '</div>'; });
+      events(d).forEach(function (e) { var s = new Date(e.debut); h += '<div class="wev' + evCls(e) + '">' + (e.journee ? '' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes()) + ' ') + esc(e.titre) + (e.salle ? '<small class="ev-info">' + esc(e.salle) + '</small>' : '') + '</div>'; });
       dayTasks(d).forEach(function (t) { h += strip(t, { compact: true, time: true }); });
       h += '</div>';
     }

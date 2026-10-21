@@ -316,7 +316,9 @@
   function isCoursDay(day, events, params) {
     var mot = norm(params.mot_cours || 'Cours');
     return events.some(function (e) {
-      if (!e.debut || !e.titre) return false;
+      if (!e.debut) return false;
+      if (e.source === 'ecole') return ymd(new Date(e.debut)) === day; // emploi du temps de l'université
+      if (!e.titre) return false;
       return ymd(new Date(e.debut)) === day && norm(e.titre).indexOf(mot) !== -1;
     });
   }
