@@ -287,8 +287,9 @@
   }
 
   /* Intervalles libres d'une journée */
-  function freeSlots(day, events, tasks, params) {
+  function freeSlots(day, events, tasks, params, from) {
     var start = toMin(params.journee_debut || '09:00'), end = toMin(params.journee_fin || '19:00');
+    if (from != null && from > start) start = from; // aujourd'hui : on ne propose rien dans le passé
     var busy = [];
     var md = toMin(params.midi_debut), mf = toMin(params.midi_fin);
     if (md !== null && mf !== null) busy.push([md, mf]);
@@ -321,17 +322,21 @@
   }
 
   /* Proposition de plan pour une journée */
-  function proposePlan(day, tasks, events, regles, params, today) {
+  /* opts.exclude : tâches refusées pour ce jour ; opts.from : minute à partir de laquelle proposer ;
+     opts.extraUsed : minutes déjà réalisées ce jour, déduites de la capacité */
+  function proposePlan(day, tasks, events, regles, params, today, opts) {
+    opts = opts || {};
+    var exclude = opts.exclude || [];
     var cours = isCoursDay(day, events, params);
     var cap = capacityFor(day, cours, regles, params);
-    var used = 0;
+    var used = num(opts.extraUsed) || 0;
     tasks.forEach(function (t) { if (t.jour === day && t.debut && t.statut !== 'Fait') used += correctedDuration(t, regles, params); });
-    var free = freeSlots(day, events, tasks, params);
+    var free = freeSlots(day, events, tasks, params, opts.from);
     var fondRule = acceptedRule(regles, 'creneau:Fond');
     var avoid = regles.filter(function (r) { return r.statut === 'acceptee' && r.cle.indexOf('eviter:') === 0; })
                       .map(function (r) { return r.cle.slice(7); });
     var cands = tasks.filter(function (t) {
-      return (t.statut === 'À faire' || t.statut === 'En cours') && !(t.jour && t.debut);
+      return (t.statut === 'À faire' || t.statut === 'En cours') && !(t.jour && t.debut) && exclude.indexOf(t.id) === -1;
     }).sort(function (a, b) { return rank(a, today, params) - rank(b, today, params); });
     var plan = [];
     var groupables = [], others = [];

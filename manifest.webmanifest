@@ -1,11 +1,11 @@
 {
-  "name": "Poste de pilotage",
-  "short_name": "Pilotage",
+  "name": "TRINITY",
+  "short_name": "TRINITY",
   "start_url": "./#aujourdhui",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#E7ECF1",
-  "theme_color": "#E7ECF1",
+  "background_color": "#05050A",
+  "theme_color": "#05050A",
   "lang": "fr",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },

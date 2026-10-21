@@ -32,7 +32,16 @@
   var S = LS.get(cfg ? 'pp.cache' : 'pp.demo', null) || (cfg ? emptyState() : demoState());
   var queue = LS.get('pp.queue', []);
   var timer = LS.get('pp.timer', null);
-  var ui = { view: 'aujourdhui', orgDay: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: 'ok' };
+  var ui = { view: 'aujourdhui', orgDay: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: cfg ? 'chargement' : 'demo',
+    auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null };
+
+  var ICON = {
+    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>',
+    cross: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
+    refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.6L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.6L20 16M20 20v-4h-4"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>'
+  };
 
   function P() { var o = {}; Object.keys(DEFAULT_PARAMS).forEach(function (k) { o[k] = DEFAULT_PARAMS[k]; }); Object.keys(S.parametres || {}).forEach(function (k) { if (S.parametres[k] !== '') o[k] = S.parametres[k]; }); return o; }
   function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); }
@@ -209,11 +218,180 @@
     var v = ui.view;
     $all('.nav a').forEach(function (a) { a.setAttribute('aria-current', a.dataset.view === v ? 'page' : 'false'); });
     var main = $('#main');
+    if (v === 'aujourdhui' || (v === 'organisation' && ui.orgMode === 'jour' && ui.orgDay === today())) maybeAuto();
+    var keepScroll = ui.view === ui.lastView && ui.orgDay === ui.lastDay;
+    var gw = $('.grid-wrap'), gScroll = gw ? gw.scrollTop : null;
     if (v === 'organisation') main.innerHTML = viewOrganisation();
     else if (v === 'listes') main.innerHTML = viewListes();
     else main.innerHTML = viewAujourdhui();
     renderTimerBar();
-    if (v === 'organisation' && ui.orgMode === 'jour') scrollGridToNow();
+    if (v === 'organisation' && ui.orgMode === 'jour') { if (keepScroll && gScroll != null && $('.grid-wrap')) $('.grid-wrap').scrollTop = gScroll; else scrollGridToNow(); }
+    ui.lastView = v; ui.lastDay = ui.orgDay;
+    if (ui.focusTri != null) {
+      var cards = $all('.tri-card'), c = cards[Math.min(ui.focusTri, cards.length - 1)];
+      if (c) c.focus({ preventScroll: true });
+      ui.focusTri = null;
+    }
+    ui.fresh = [];
+  }
+
+  /* Tri des propositions : une liste verticale, ✓ pour placer, ✕ pour refuser.
+     Chaque refus est remplacé automatiquement en fonction du temps libre restant. */
+  function doneMinutes(d) { var m = 0; dayTasks(d).forEach(function (t) { if (t.statut === 'Fait') m += C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0; }); return m; }
+  function fromFor(d) { return d === today() ? Math.ceil(nowMin() / 15) * 15 : null; }
+  function planById(id) { for (var i = 0; i < S.plan.length; i++) if (S.plan[i].id === id) return S.plan[i]; return null; }
+  function proposals(d) {
+    return S.plan.filter(function (r) {
+      if (r.jour !== d || r.statut !== 'propose') return false;
+      var t = getTask(r.tache_id); return t && active(t) && !(t.jour && t.debut);
+    }).sort(function (a, b) { return C.toMin(a.debut) - C.toMin(b.debut); });
+  }
+  // Les propositions en attente occupent leur créneau, pour que les remplaçantes ne se chevauchent pas.
+  function virtualTasks(d, skipPid) {
+    var map = {};
+    proposals(d).forEach(function (r) { if (r.id !== skipPid) map[r.tache_id] = r; });
+    return S.taches.filter(function (t) { return t.statut !== 'Supprimée'; }).map(function (t) {
+      var r = map[t.id];
+      return r ? Object.assign({}, t, { jour: d, debut: r.debut, duree_min: C.num(r.duree_min) || t.duree_min }) : t;
+    });
+  }
+  function refusedIds(d) { return S.plan.filter(function (r) { return r.jour === d && r.statut === 'refuse'; }).map(function (r) { return r.tache_id; }); }
+  function freeOf(d, skipPid) { return C.freeSlots(d, S.evenements || [], virtualTasks(d, skipPid), P(), fromFor(d)); }
+  function refill(d) {
+    var res = C.proposePlan(d, virtualTasks(d), S.evenements || [], S.regles, P(), today(),
+      { exclude: refusedIds(d), from: fromFor(d), extraUsed: d === today() ? doneMinutes(d) : 0 });
+    var ids = [];
+    res.plan.forEach(function (r) {
+      var id = uid('pl'); ids.push(id);
+      push('plan', { id: id, jour: d, tache_id: r.tache_id, debut: r.debut, duree_min: r.duree_min, raison: r.raison, statut: 'propose', auteur: 'site', cree_le: nowIso() });
+    });
+    ui.fresh = ids;
+    return { ids: ids, res: res };
+  }
+  // Le matin, la journée se propose toute seule : il ne reste qu'à trier.
+  function maybeAuto() {
+    var d = today();
+    if (['ok', 'demo', 'envoi'].indexOf(ui.syncState) === -1 || ui.auto[d]) return;
+    ui.auto[d] = true;
+    if (C.weekday(d) > 5 || S.plan.some(function (r) { return r.jour === d; })) return;
+    if (!S.taches.some(function (t) { return active(t) && !(t.jour && t.debut); })) return;
+    refill(d);
+  }
+  function startOptions(d, dur, skipPid) {
+    var out = [];
+    freeOf(d, skipPid).forEach(function (f) {
+      var m = f[0];
+      while (m + dur <= f[1] && out.length < 18) { out.push(m); m = Math.floor(m / 30) * 30 + 30; }
+    });
+    return out;
+  }
+  function decide(pid, ok) {
+    var r = planById(pid); if (!r) return;
+    var t = getTask(r.tache_id), d = r.jour;
+    var prev = t ? { jour: t.jour, debut: t.debut, duree_min: t.duree_min } : null;
+    if (ok) {
+      acceptPlan(r, true);
+      toast('Placée à ' + r.debut, function () { r.statut = 'propose'; push('plan', r); if (t) saveTask(t, prev, { detail: 'annulation' }); render(); });
+    } else {
+      r.statut = 'refuse'; push('plan', r);
+      var out = refill(d), first = out.ids.length ? getTask(planById(out.ids[0]).tache_id) : null;
+      var msg = !out.ids.length ? 'Refusée. Plus rien ne rentre dans le temps restant' : (out.ids.length === 1 ? 'Remplacée par « ' + first.titre + ' »' : out.ids.length + ' nouvelles propositions');
+      toast(msg, function () {
+        out.ids.forEach(function (id) { var x = planById(id); if (x && x.statut === 'propose') { x.statut = 'remplace'; push('plan', x); } });
+        r.statut = 'propose'; push('plan', r); render();
+      });
+    }
+    render();
+  }
+  function acceptAll(d) {
+    var done = [];
+    proposals(d).forEach(function (r) { var t = getTask(r.tache_id); done.push({ r: r, t: t, prev: { jour: t.jour, debut: t.debut, duree_min: t.duree_min } }); acceptPlan(r, true); });
+    if (!done.length) return;
+    toast(done.length + ' tâches placées', function () { done.forEach(function (x) { x.r.statut = 'propose'; push('plan', x.r); saveTask(x.t, x.prev, { detail: 'annulation' }); }); render(); });
+    render();
+  }
+  function placeAt(t, d, debut) {
+    var prev = { jour: t.jour, debut: t.debut };
+    S.plan.filter(function (r) { return r.tache_id === t.id && r.jour === d && r.statut === 'propose'; })
+      .forEach(function (r) { r.statut = r.debut === debut ? 'accepte' : 'remplace'; push('plan', r); });
+    saveTask(t, { jour: d, debut: debut, statut: t.statut === 'En attente' ? 'À faire' : t.statut });
+    return prev;
+  }
+  function leave(card, dir, fn) {
+    if (!card || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { fn(); return; }
+    card.classList.add(dir > 0 ? 'is-out-yes' : 'is-out-no');
+    setTimeout(fn, 170);
+  }
+  function triageHtml(d, opts) {
+    opts = opts || {};
+    var props = proposals(d), free = freeOf(d);
+    var freeMin = free.reduce(function (s, f) { return s + f[1] - f[0]; }, 0);
+    var h = '<section class="triage" data-day="' + d + '"><div class="tri-head"><div><p class="kicker">Propositions</p><h2>' +
+      (props.length ? props.length + ' à trier' : 'Tout est trié') + '</h2></div><div class="tri-tools">' +
+      '<button class="btn sm ghost" data-act="propose" data-day="' + d + '" aria-label="Proposer à nouveau">' + ICON.refresh + '<span>Regénérer</span></button>' +
+      (props.length > 1 ? '<button class="btn sm primary" data-act="plan-all" data-day="' + d + '">' + ICON.check + '<span>Tout placer</span></button>' : '') + '</div></div>';
+    if (props.length) {
+      h += '<div class="tri-list" role="list">' + props.map(triCard).join('') + '</div>' +
+        '<p class="tri-hint"><span class="hint-touch">Glisse à droite pour placer, à gauche pour refuser.</span><span class="hint-keys">Flèche droite pour placer, flèche gauche pour refuser.</span> Un refus est remplacé automatiquement. Touche l\'heure pour la changer.</p>';
+    } else {
+      h += '<p class="tri-empty">' + (freeMin >= 15 ? 'Il te reste ' + C.fmtDur(freeMin) + ' de temps libre. Touche un créneau pour le remplir, ou regénère des propositions.' : 'Ta journée est pleine.') + '</p>';
+    }
+    if (free.length && opts.free !== false) {
+      h += '<div class="free"><p class="kicker">Créneaux libres</p><div class="free-list">' + free.map(function (f) {
+        return '<button class="fs-chip" data-act="gap" data-day="' + d + '" data-a="' + f[0] + '" data-b="' + f[1] + '"><b>' + C.fromMin(f[0]) + '</b><span>' + C.fromMin(f[1]) + '</span><em>' + C.fmtDur(f[1] - f[0]) + '</em></button>';
+      }).join('') + '</div></div>';
+    }
+    return h + '</section>';
+  }
+  function triCard(r) {
+    var t = getTask(r.tache_id), ent = ENT_KEY[t.entite] || 'p', prio = +t.prio || 3;
+    var fresh = ui.fresh.indexOf(r.id) !== -1;
+    return '<div class="tri-row" role="listitem"><div class="tri-bg" aria-hidden="true"><span class="bg-yes">' + ICON.check + 'Placer</span><span class="bg-no">Refuser' + ICON.cross + '</span></div>' +
+      '<div class="tri-card' + (fresh ? ' is-new' : '') + '" tabindex="0" data-pid="' + esc(r.id) + '" style="--p:var(--p' + prio + ');--e:var(--e-' + ent + ')" aria-label="' + esc(t.titre) + ', proposée à ' + esc(r.debut) + '">' +
+        '<button class="tri-time" data-act="tri-time" data-pid="' + esc(r.id) + '" aria-label="Changer l\'heure, ' + esc(r.debut) + '">' + esc(r.debut) + '</button>' +
+        '<div class="tri-main" data-act="tri-open" data-pid="' + esc(r.id) + '"><div class="tri-title">' + esc(t.titre) + '</div><div class="tri-meta"><span class="tri-ent">' + esc(ENT_SHORT[t.entite] || t.entite) + '</span><span>' + esc(C.fmtDur(C.num(r.duree_min) || C.num(t.duree_min) || 30)) + '</span>' + (r.raison ? '<span class="tri-why">' + esc(r.raison) + '</span>' : '') + '</div></div>' +
+        '<button class="tri-btn no" data-act="plan-no" data-pid="' + esc(r.id) + '" aria-label="Refuser">' + ICON.cross + '</button>' +
+        '<button class="tri-btn yes" data-act="plan-yes" data-pid="' + esc(r.id) + '" aria-label="Placer">' + ICON.check + '</button>' +
+      '</div></div>';
+  }
+  function timesHtml(m0List, act, attrs) {
+    return '<div class="pop-times">' + m0List.map(function (m) { return '<button class="pop-time" data-act="' + act + '" ' + attrs + ' data-v="' + C.fromMin(m) + '">' + C.fromMin(m) + '</button>'; }).join('') + '</div>';
+  }
+  function placePop(anchor, t, d) {
+    var dur = C.num(t.duree_min) || 30, opts = startOptions(d, dur);
+    openPop(anchor, '<div class="pop-title">Placer ' + (d === today() ? 'aujourd\'hui' : C.shortDate(d)) + ', ' + C.fmtDur(dur) + '</div>' +
+      (opts.length ? timesHtml(opts, 'place-at', 'data-id="' + esc(t.id) + '" data-day="' + d + '"') : '<p class="pop-none">Aucun créneau libre de ' + C.fmtDur(dur) + '.</p>') +
+      '<button class="pop-opt" data-act="edit-id" data-id="' + esc(t.id) + '">Modifier la tâche</button>');
+  }
+
+  /* Créneau vers tâches : on choisit l'heure, puis le titre dans une liste */
+  function openPicker(d, a, b) { ui.pick = { d: d, a: a, b: b, q: '' }; openSheet(pickerHtml(), { noFocus: true }); }
+  function pickerHtml() {
+    var k = ui.pick, room = k.b - k.a;
+    return '<div class="pick-head"><p class="kicker">' + (k.d === today() ? 'Aujourd\'hui' : esc(cap1(C.longDate(k.d)))) + '</p><h2>Placer à ' + C.fromMin(k.a) + '</h2><p class="muted">Libre jusqu\'à ' + C.fromMin(k.b) + ', soit ' + C.fmtDur(room) + '.</p></div>' +
+      '<div class="pick-tools"><input id="pick-q" type="search" placeholder="Filtrer par titre" autocomplete="off" aria-label="Filtrer les tâches" value="' + esc(k.q) + '"><button class="btn sm" data-act="pick-new">' + ICON.plus + '<span>Nouvelle</span></button></div>' +
+      '<div id="pick-list" class="pick-list">' + pickList() + '</div><div class="row-actions"><button class="btn" data-act="close">Fermer</button></div>';
+  }
+  function pickList() {
+    var k = ui.pick, room = k.b - k.a, d = today();
+    var cands = S.taches.filter(function (t) { return active(t) && !(t.jour && t.debut) && (!k.q || C.norm(t.titre).indexOf(C.norm(k.q)) !== -1); })
+      .sort(function (a, b) { return C.rank(a, d, P()) - C.rank(b, d, P()); });
+    var proposedIds = proposals(k.d).map(function (r) { return r.tache_id; });
+    function item(t) {
+      var dur = C.num(t.duree_min) || 30;
+      return '<button class="pick-item' + (dur > room ? ' is-long' : '') + '" data-act="pick" data-id="' + esc(t.id) + '" style="--p:var(--p' + (+t.prio || 3) + ');--e:var(--e-' + (ENT_KEY[t.entite] || 'p') + ')"><i class="pi-p"></i><span class="pi-title">' + esc(t.titre) + (proposedIds.indexOf(t.id) !== -1 ? '<small>proposée</small>' : '') + '</span><span class="pi-ent">' + esc(ENT_SHORT[t.entite] || t.entite) + '</span><span class="pi-dur">' + C.fmtDur(dur) + '</span></button>';
+    }
+    var fit = cands.filter(function (t) { return (C.num(t.duree_min) || 30) <= room; }), long = cands.filter(function (t) { return (C.num(t.duree_min) || 30) > room; });
+    if (!cands.length) return '<p class="empty">' + (k.q ? 'Aucune tâche ne correspond.' : 'Toutes tes tâches sont placées.') + '</p>';
+    return fit.map(item).join('') + (long.length ? '<p class="pick-sub">Plus longues que le créneau</p>' + long.map(item).join('') : '');
+  }
+  function pickTask(t) {
+    var k = ui.pick, dur = C.num(t.duree_min) || 30, debut = C.fromMin(k.a), prev = placeAt(t, k.d, debut);
+    toast('« ' + t.titre + ' » placée à ' + debut, function () { saveTask(t, prev, { detail: 'annulation' }); render(); });
+    k.a += dur;
+    if (k.b - k.a >= 10) { $('#sheet .sheet-body').innerHTML = pickerHtml(); }
+    else closeSheet();
+    render();
   }
 
   function viewAujourdhui() {
@@ -242,7 +420,7 @@
     var od = overdue();
     var sugg = C.suggestions(C.stats(S.journal, p, d), S.regles, p).slice(0, 3);
     var accepted = S.regles.filter(function (r) { return r.statut === 'acceptee'; }).length;
-    var proposes = S.plan.filter(function (r) { return r.jour === d && r.statut === 'propose'; }).length;
+    var proposes = proposals(d).length;
     var mood = null; S.humeur.forEach(function (h) { if (h.jour === d) mood = h; });
 
     var h = '';
@@ -256,7 +434,7 @@
         '<div class="row-actions">' + (running ? '<button class="btn primary" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button><button class="btn" data-act="stop">Arrêter le chrono</button>'
           : '<button class="btn primary" data-act="start" data-id="' + esc(t.id) + '">Commencer</button><button class="btn" data-act="done" data-id="' + esc(t.id) + '">Déjà faite</button>') + '</div></section>';
     }
-    if (proposes) h += '<a class="notice" href="#organisation">Un plan t\'attend pour aujourd\'hui (' + proposes + ' tâche' + (proposes > 1 ? 's' : '') + ') : ouvre Organisation pour l\'accepter ou le modifier.</a>';
+    if (proposes) h += triageHtml(d, { free: false });
 
     h += '<section class="block"><div class="block-head"><h2>Au programme</h2><a class="link" href="#organisation">Organiser</a></div>';
     h += rows.length ? '<div class="agenda">' + rows.map(function (r) { return r.html; }).join('') + '</div>' : '<p class="empty">Rien de prévu. Ouvre Organisation pour placer tes tâches ou demander un plan.</p>';
@@ -302,9 +480,8 @@
       var L = dayLoad(d);
       h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button>' + (d !== today() ? '<button class="link" data-act="day" data-delta="0">Aujourd\'hui</button>' : '') + '</div>';
       h += '<p class="hero-line">' + (L.cours ? 'Jour de cours. ' : '') + C.fmtDur(L.charge) + ' prévues sur ' + C.fmtDur(L.cap) + (L.charge > L.cap ? ', au-delà de ta capacité.' : '.') + '</p>';
-      h += '<div class="row-actions"><button class="btn primary" data-act="propose">Proposer un plan</button><button class="btn" data-act="ask">Demander à Claude</button></div></section>';
-      h += planBanner(d);
-      h += '<div class="org">' + trayHtml(d) + gridHtml(d) + '</div>';
+      h += '</section>';
+      h += '<div class="org"><div class="org-side">' + triageHtml(d) + trayHtml(d) + '<button class="btn wide ghost" data-act="ask">Demander à Claude</button></div>' + gridHtml(d) + '</div>';
     } else {
       var mon = C.mondayOf(d);
       h += '<div class="daynav"><button class="icon" data-act="week" data-delta="-7" aria-label="Semaine précédente">‹</button><h1>Semaine du ' + esc(C.longDate(mon).replace(/^lundi /, '')) + '</h1><button class="icon" data-act="week" data-delta="7" aria-label="Semaine suivante">›</button></div></section>';
@@ -312,18 +489,14 @@
     }
     return h;
   }
-  function planBanner(d) {
-    var props = S.plan.filter(function (r) { return r.jour === d && r.statut === 'propose' && getTask(r.tache_id); });
-    if (!props.length) return '';
-    var auteur = props.some(function (r) { return r.auteur === 'claude'; }) ? 'Claude propose' : 'Proposition';
-    return '<div class="plan-banner"><p>' + auteur + ' ' + props.length + ' tâche' + (props.length > 1 ? 's' : '') + ' pour ce jour, en pointillés sur la grille. Accepte-les, déplace-les ou retire celles qui ne te vont pas.</p><div class="row-actions"><button class="btn primary sm" data-act="plan-all">Tout accepter</button><button class="btn sm" data-act="plan-none">Tout refuser</button></div></div>';
-  }
   function trayHtml(d) {
     var f = ui.filtre;
     var noHour = S.taches.filter(function (t) { return t.jour === d && !t.debut && active(t); });
     var toPlace = S.taches.filter(function (t) { return active(t) && !t.jour && (!f.entite || t.entite === f.entite); })
       .sort(function (a, b) { return C.rank(a, today(), P()) - C.rank(b, today(), P()); });
-    var h = '<aside class="tray" data-drop="tray"><div class="tray-head"><h2>À placer <span class="count">' + toPlace.length + '</span></h2>' + entChips(f.entite, 'tray-ent') + '</div><div class="tray-list">';
+    var h = '<aside class="tray' + (ui.trayOpen ? ' is-open' : '') + '" data-drop="tray"><button class="tray-toggle" data-act="tray-toggle" aria-expanded="' + ui.trayOpen + '"><span class="kicker">Réserve</span><h2>À placer <span class="count">' + toPlace.length + '</span></h2>' + ICON.chevron + '</button>';
+    if (!ui.trayOpen) return h + '</aside>';
+    h += '<p class="tray-tip">Touche une tâche pour choisir son heure, ou fais-la glisser sur la grille.</p>' + entChips(f.entite, 'tray-ent') + '<div class="tray-list">';
     if (noHour.length) h += '<p class="tray-sub">Prévues ce jour, sans heure</p>' + noHour.map(function (t) { return strip(t, { compact: false }); }).join('') + '<p class="tray-sub">Toutes les autres</p>';
     h += toPlace.map(function (t) { return strip(t); }).join('') || '<p class="empty">Tout est placé.</p>';
     return h + '</div></aside>';
@@ -344,6 +517,10 @@
       if (e.journee) return;
       var s = new Date(e.debut), f = new Date(e.fin), a = s.getHours() * 60 + s.getMinutes(), b = f.getHours() * 60 + f.getMinutes();
       h += '<div class="ev-block' + (e.source === 'outlook' ? ' is-outlook' : '') + '" style="top:' + yOf(a) + 'px;height:' + Math.max(18, yOf(b) - yOf(a)) + 'px"><span>' + esc(e.titre) + '</span></div>';
+    });
+    freeOf(d).forEach(function (f) {
+      if (f[1] - f[0] < 15) return;
+      h += '<button class="gap" data-act="gap" data-day="' + d + '" data-a="' + f[0] + '" data-b="' + f[1] + '" style="top:' + (yOf(f[0]) + 2) + 'px;height:' + Math.max(20, yOf(f[1]) - yOf(f[0]) - 4) + 'px" aria-label="Créneau libre de ' + C.fromMin(f[0]) + ' à ' + C.fromMin(f[1]) + ', le remplir"><span>' + ICON.plus + 'Libre, ' + C.fmtDur(f[1] - f[0]) + '</span></button>';
     });
     // Les tâches courtes s'empilent : une tâche de 10 min reste lisible sans masquer la suivante.
     var items = [];
@@ -461,9 +638,9 @@
   }
 
   /* Éditeur */
-  function openEditor(t) {
+  function openEditor(t, preset) {
     var isNew = !t;
-    t = t || { titre: '', prio: 2, entite: 'ETS MAURAGE', type: 'Fond', duree_min: 30, statut: 'À faire', echeance: '', jour: '', debut: '', contexte: '' };
+    t = t || Object.assign({ titre: '', prio: 2, entite: 'ETS MAURAGE', type: 'Fond', duree_min: 30, statut: 'À faire', echeance: '', jour: '', debut: '', contexte: '' }, preset || {});
     var h = '<h2>' + (isNew ? 'Nouvelle tâche' : 'Modifier la tâche') + '</h2><form data-form="edit" data-id="' + esc(t.id || '') + '">' +
       '<label class="field"><span>Titre</span><input name="titre" required value="' + esc(t.titre) + '"></label>' +
       '<div class="field"><span>Priorité</span><div class="chips">' + [1, 2, 3, 4].map(function (n) { return '<label class="chip"><input type="radio" name="prio" value="' + n + '"' + (+t.prio === n ? ' checked' : '') + '><i style="--e:var(--p' + n + ')"></i>' + PRIO_NAME[n] + '</label>'; }).join('') + '</div></div>' +
@@ -481,11 +658,13 @@
   }
 
   /* Feuille modale, menu et notifications */
-  function openSheet(html) {
+  function openSheet(html, o) {
     var s = $('#sheet');
     s.querySelector('.sheet-body').innerHTML = html;
     if (!s.open) s.showModal();
-    var first = s.querySelector('input:not([type=radio]), select, textarea, button'); if (first) first.focus();
+    // Sur téléphone, ne pas ouvrir le clavier d'office quand on choisit dans une liste
+    var first = (o && o.noFocus && matchMedia('(pointer: coarse)').matches) ? s.querySelector('.sheet-body') : s.querySelector('input:not([type=radio]), select, textarea, button');
+    if (first) { if (first.classList.contains('sheet-body')) first.setAttribute('tabindex', '-1'); first.focus(); }
   }
   function closeSheet() { var s = $('#sheet'); if (s.open) s.close(); }
   function openPop(anchor, html) {
@@ -498,7 +677,12 @@
   }
   function closePop() { $('#pop').hidden = true; }
   var toastTimer;
-  function toast(msg) { var t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 3200); }
+  function toast(msg, undo) {
+    var t = $('#toast'); ui.undo = undo || null;
+    t.innerHTML = '<span>' + esc(msg) + '</span>' + (undo ? '<button data-act="undo">Annuler</button>' : '');
+    t.hidden = false; clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; ui.undo = null; }, undo ? 5500 : 3200);
+  }
 
   /* Règles apprises */
   function decideRule(s, ok) {
@@ -514,13 +698,12 @@
   }
 
   /* Plans */
-  function proposeLocal() {
-    var d = ui.orgDay;
+  function proposeLocal(d) {
+    d = d || ui.orgDay;
     S.plan.filter(function (r) { return r.jour === d && r.statut === 'propose'; }).forEach(function (r) { r.statut = 'remplace'; push('plan', r); });
-    var res = C.proposePlan(d, S.taches, S.evenements || [], S.regles, P(), today());
-    if (!res.plan.length) { toast(res.charge >= res.capacite ? 'La journée est déjà pleine' : 'Aucune tâche à placer dans les créneaux libres'); render(); return; }
-    res.plan.forEach(function (r) { push('plan', { id: uid('pl'), jour: d, tache_id: r.tache_id, debut: r.debut, duree_min: r.duree_min, raison: r.raison, statut: 'propose', auteur: 'site', cree_le: nowIso() }); });
-    toast(res.plan.length + ' tâches proposées');
+    var out = refill(d);
+    if (!out.ids.length) toast(out.res.charge >= out.res.capacite ? 'Ta journée est déjà pleine' : 'Aucune tâche ne rentre dans le temps libre restant');
+    else toast(out.ids.length + ' proposition' + (out.ids.length > 1 ? 's' : '') + ' prête' + (out.ids.length > 1 ? 's' : ''));
     render();
   }
   function acceptPlan(r, ok) {
@@ -537,7 +720,7 @@
   function askGo() {
     var q = ($('#ask-q') || {}).value || '';
     var base = S.base_id ? 'https://docs.google.com/spreadsheets/d/' + S.base_id : 'ma base Google Sheets « Poste de pilotage — base »';
-    var prompt = 'Poste de pilotage. Ma base de tâches : ' + base + ' (onglets Taches, Journal, Regles, Plan, Humeur, Parametres). Nous sommes ' + C.longDate(today()) + ', il est ' + C.fromMin(nowMin()) + '. ' + q.trim() +
+    var prompt = 'TRINITY (Poste de pilotage). Ma base de tâches : ' + base + ' (onglets Taches, Journal, Regles, Plan, Humeur, Parametres). Nous sommes ' + C.longDate(today()) + ', il est ' + C.fromMin(nowMin()) + '. ' + q.trim() +
       ' Si tu modifies mon planning, écris tes propositions dans l\'onglet Plan (statut propose, auteur claude) pour que je les valide sur le site.';
     window.open('https://claude.ai/new?q=' + encodeURIComponent(prompt), '_blank', 'noopener');
     closeSheet();
@@ -553,9 +736,19 @@
   }
 
   /* Glisser-déposer : souris immédiat, doigt après un appui long */
-  var drag = null;
+  var drag = null, swipe = null, SWIPE = 84;
+  function swipeReset(s) {
+    s.el.classList.remove('is-swiping'); s.el.style.transform = '';
+    var row = s.el.parentNode; row.removeAttribute('data-dir'); row.classList.remove('is-armed');
+  }
   function onPointerDown(e) {
     if (e.button && e.button !== 0) return;
+    var card = e.target.closest('.tri-card');
+    if (card) {
+      if (e.target.closest('button')) return;
+      swipe = { el: card, x0: e.clientX, y0: e.clientY, dx: 0, on: false };
+      return;
+    }
     var rz = e.target.closest('[data-act="resize"]');
     if (rz) { startResize(e, rz.parentNode); return; }
     if (e.target.closest('button, input, textarea, select, a')) return;
@@ -567,6 +760,22 @@
   }
   function onPointerMove(e) {
     if (resize) { moveResize(e); return; }
+    if (swipe) {
+      var sx = e.clientX - swipe.x0, sy = e.clientY - swipe.y0;
+      if (!swipe.on) {
+        if (Math.abs(sy) > 10 && Math.abs(sy) > Math.abs(sx)) { swipe = null; return; }
+        if (Math.abs(sx) < 10) return;
+        swipe.on = true; swipe.el.classList.add('is-swiping');
+      }
+      e.preventDefault();
+      swipe.dx = sx;
+      swipe.el.style.transform = 'translateX(' + sx + 'px)';
+      var row = swipe.el.parentNode;
+      row.setAttribute('data-dir', sx > 0 ? 'yes' : 'no');
+      var armed = Math.abs(sx) > SWIPE;
+      if (armed !== row.classList.contains('is-armed')) { row.classList.toggle('is-armed', armed); if (armed && navigator.vibrate) navigator.vibrate(8); }
+      return;
+    }
     if (!drag) return;
     var dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
     if (!drag.started) {
@@ -627,6 +836,17 @@
   }
   function onPointerUp() {
     if (resize) { endResize(); return; }
+    if (swipe) {
+      var s = swipe; swipe = null;
+      if (!s.on) return;
+      suppressClick = true; setTimeout(function () { suppressClick = false; }, 60);
+      if (Math.abs(s.dx) > SWIPE) {
+        var ok = s.dx > 0, pid = s.el.dataset.pid;
+        s.el.style.transform = 'translateX(' + (ok ? 110 : -110) + '%)';
+        setTimeout(function () { decide(pid, ok); }, 150);
+      } else swipeReset(s);
+      return;
+    }
     if (!drag) return;
     clearTimeout(drag.hold);
     var d = drag; drag = null;
@@ -697,6 +917,14 @@
     if (suppressClick) { e.preventDefault(); e.stopPropagation(); return; }
     var pop = $('#pop');
     if (!pop.hidden && !e.target.closest('#pop')) closePop();
+    var gridEl = e.target.closest('[data-drop="grid"]');
+    if (gridEl && !e.target.closest('.slot, .ev-block, [data-act]')) {
+      var gr = gridEl.getBoundingClientRect(), gd = gridEl.dataset.day;
+      var gm = H0 * 60 + Math.floor((e.clientY - gr.top) / HPX * 60 / 15) * 15;
+      var inF = freeOf(gd).filter(function (f) { return f[0] <= gm && gm < f[1]; })[0];
+      openPicker(gd, gm, inF ? inF[1] : gm + 60);
+      return;
+    }
     var a = e.target.closest('[data-act]'); if (!a) return;
     var act = a.dataset.act, stripEl = a.closest('.strip'), t = stripEl ? getTask(stripEl.dataset.id) : (a.dataset.id ? getTask(a.dataset.id) : null);
     switch (act) {
@@ -705,8 +933,26 @@
         if (ps) {
           var pl = S.plan.filter(function (r) { return r.id === ps.dataset.pid; })[0];
           openPop(a, '<div class="pop-title">' + esc((pl && pl.raison ? pl.raison + ', ' : '') + 'proposée à ' + (pl ? pl.debut : '')) + '</div><button class="pop-opt" data-act="plan-yes" data-pid="' + esc(ps.dataset.pid) + '">Accepter</button><button class="pop-opt" data-act="plan-no" data-pid="' + esc(ps.dataset.pid) + '">Refuser</button><button class="pop-opt" data-act="edit-id" data-id="' + esc(t.id) + '">Ouvrir la tâche</button>');
-        } else if (t && !a.closest('#pop')) openEditor(t);
+        } else if (t && a.closest('.tray') && ui.view === 'organisation') placePop(a, t, ui.orgDay);
+        else if (t && !a.closest('#pop')) openEditor(t);
         break;
+      case 'place-at':
+        if (t) { var pv = placeAt(t, a.dataset.day, a.dataset.v), pt = t; closePop(); toast('Placée à ' + a.dataset.v, function () { saveTask(pt, pv, { detail: 'annulation' }); render(); }); render(); }
+        break;
+      case 'tri-time':
+        var tr = planById(a.dataset.pid), tt = tr && getTask(tr.tache_id);
+        if (tt) {
+          var tdur = C.num(tr.duree_min) || C.num(tt.duree_min) || 30, topts = startOptions(tr.jour, tdur, tr.id);
+          openPop(a, '<div class="pop-title">Placer à une autre heure, ' + C.fmtDur(tdur) + '</div>' + (topts.length ? timesHtml(topts, 'tri-set', 'data-pid="' + esc(tr.id) + '"') : '<p class="pop-none">Aucun autre créneau libre.</p>'));
+        }
+        break;
+      case 'tri-set': var ts = planById(a.dataset.pid); if (ts) { ts.debut = a.dataset.v; closePop(); decide(ts.id, true); } break;
+      case 'tri-open': var to = planById(a.dataset.pid); if (to && getTask(to.tache_id)) openEditor(getTask(to.tache_id)); break;
+      case 'gap': openPicker(a.dataset.day, +a.dataset.a, +a.dataset.b); break;
+      case 'pick': if (t && ui.pick) pickTask(t); break;
+      case 'pick-new': var pk = ui.pick; closeSheet(); openEditor(null, { jour: pk.d, debut: C.fromMin(pk.a), duree_min: Math.min(60, Math.max(15, pk.b - pk.a)) }); break;
+      case 'tray-toggle': ui.trayOpen = !ui.trayOpen; render(); break;
+      case 'undo': var u = ui.undo; ui.undo = null; $('#toast').hidden = true; if (u) u(); break;
       case 'edit-id': closePop(); if (t) openEditor(t); break;
       case 'prio':
         openPop(a, '<div class="pop-title">Priorité</div>' + [1, 2, 3, 4].map(function (n) { return '<button class="pop-opt" data-act="set-prio" data-id="' + esc(t.id) + '" data-v="' + n + '"><i style="--e:var(--p' + n + ')"></i>' + C.PRIO_LABELS[n] + '</button>'; }).join(''));
@@ -737,9 +983,13 @@
       case 'day': ui.orgDay = +a.dataset.delta === 0 ? today() : C.addDays(ui.orgDay, +a.dataset.delta); render(); break;
       case 'week': ui.orgDay = C.addDays(ui.orgDay, +a.dataset.delta); render(); break;
       case 'openday': ui.orgDay = a.dataset.day; ui.orgMode = 'jour'; render(); break;
-      case 'propose': proposeLocal(); break;
-      case 'plan-yes': case 'plan-no': var pr = S.plan.filter(function (r) { return r.id === a.dataset.pid; })[0]; if (pr) { acceptPlan(pr, act === 'plan-yes'); closePop(); toast(act === 'plan-yes' ? 'Placée à ' + pr.debut : 'Proposition retirée'); render(); } break;
-      case 'plan-all': case 'plan-none': S.plan.filter(function (r) { return r.jour === ui.orgDay && r.statut === 'propose'; }).forEach(function (r) { acceptPlan(r, act === 'plan-all'); }); toast(act === 'plan-all' ? 'Plan accepté' : 'Plan refusé'); render(); break;
+      case 'propose': proposeLocal(a.dataset.day || ui.orgDay); break;
+      case 'plan-yes': case 'plan-no':
+        var pid = a.dataset.pid, yes = act === 'plan-yes'; closePop();
+        var card = a.closest('.tri-card'); if (card) ui.focusTri = $all('.tri-card').indexOf(card);
+        leave(card, yes ? 1 : -1, function () { decide(pid, yes); });
+        break;
+      case 'plan-all': acceptAll(a.dataset.day || ui.orgDay); break;
       case 'tray-ent': case 'list-ent': ui.filtre.entite = a.dataset.v; render(); break;
       case 'list-prio': ui.filtre.prio = +ui.filtre.prio === +a.dataset.v ? '' : a.dataset.v; render(); break;
       case 'statut': ui.filtre.statut = a.dataset.v; render(); break;
@@ -795,6 +1045,8 @@
       if (p.jour) bits.push(C.shortDate(p.jour)); if (p.debut) bits.push('à ' + p.debut); if (p.duree_min) bits.push(C.fmtDur(p.duree_min));
       if (p.entite) bits.push(p.entite); if (p.prio) bits.push(PRIO_NAME[p.prio]); if (p.type) bits.push(p.type);
       $('#quick-preview').textContent = bits.length ? 'Compris : ' + bits.join(', ') : '';
+    } else if (e.target.id === 'pick-q' && ui.pick) {
+      ui.pick.q = e.target.value; $('#pick-list').innerHTML = pickList();
     } else if (e.target.id === 'search') {
       ui.filtre.q = e.target.value;
       clearTimeout(ui.st); ui.st = setTimeout(function () { var pos = e.target.selectionStart; render(); var s = $('#search'); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }, 250);
@@ -802,14 +1054,26 @@
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closePop();
+    var card = e.target.classList && e.target.classList.contains('tri-card') ? e.target : null;
+    if (card) {
+      var cards = $all('.tri-card'), i = cards.indexOf(card), k = e.key;
+      if (k === 'ArrowRight' || k === 'Enter' || k === 'v') { e.preventDefault(); ui.focusTri = i; leave(card, 1, function () { decide(card.dataset.pid, true); }); }
+      else if (k === 'ArrowLeft' || k === 'Delete' || k === 'Backspace' || k === 'x') { e.preventDefault(); ui.focusTri = i; leave(card, -1, function () { decide(card.dataset.pid, false); }); }
+      else if (k === 'ArrowDown' && cards[i + 1]) { e.preventDefault(); cards[i + 1].focus(); }
+      else if (k === 'ArrowUp' && cards[i - 1]) { e.preventDefault(); cards[i - 1].focus(); }
+      return;
+    }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('strip-body')) openEditor(getTask(e.target.closest('.strip').dataset.id));
   });
   document.addEventListener('pointerdown', onPointerDown);
   document.addEventListener('pointermove', onPointerMove, { passive: false });
   document.addEventListener('pointerup', onPointerUp);
-  document.addEventListener('pointercancel', function () { if (drag && drag.started) onPointerUp(); else if (drag) { clearTimeout(drag.hold); drag = null; } });
+  document.addEventListener('pointercancel', function () {
+    if (swipe) { if (swipe.on) swipeReset(swipe); swipe = null; return; }
+    if (drag && drag.started) onPointerUp(); else if (drag) { clearTimeout(drag.hold); drag = null; }
+  });
   document.addEventListener('contextmenu', function (e) { if (drag && drag.touch) e.preventDefault(); });
-  document.addEventListener('touchmove', function (e) { if ((drag && drag.started) || resize) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', function (e) { if ((drag && drag.started) || resize || (swipe && swipe.on)) e.preventDefault(); }, { passive: false });
 
   function route() {
     var h = (location.hash || '#aujourdhui').slice(1);
