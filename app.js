@@ -127,7 +127,7 @@
   function setSync(st) {
     ui.syncState = st;
     var el = $('#sync'); if (!el) return;
-    var txt = { ok: 'À jour', envoi: 'Enregistrement…', chargement: 'Chargement…', horsligne: 'Hors ligne, enregistré sur cet appareil', erreur: 'La base ne répond pas', cle: 'Clé refusée : vérifie les réglages', demo: 'Mode démo : relie ta base dans Réglages' }[st] || '';
+    var txt = { ok: 'À jour', envoi: 'Enregistrement…', chargement: 'Chargement…', horsligne: 'Hors ligne', erreur: 'Base injoignable', cle: 'Clé refusée', demo: 'Démo, base non reliée' }[st] || '';
     el.textContent = txt; el.dataset.state = st;
   }
 
@@ -211,10 +211,22 @@
     return Math.round(k.reduce(function (s, j) { return s + per[j]; }, 0) / k.length);
   }
   function moodOf(day) { var m = null; S.humeur.forEach(function (h) { if (h.jour === day) m = h; }); return m; }
+  /* Séances : chaque temps réellement passé sur une tâche, compté le jour où il a été passé */
+  function seancesOf(day) { return S.journal.filter(function (e) { return e.action === 'seance' && e.jour === day; }).map(function (e) { return { tache_id: e.tache_id, entite: e.entite, type: e.type, min: e.duree_reelle, debut: e.debut }; }); }
+  function avecSeance() { var o = {}; S.journal.forEach(function (e) { if (e.action === 'seance') o[e.tache_id] = true; }); return Object.keys(o); }
+  function spentMap() { var o = {}; S.journal.forEach(function (e) { if (e.action === 'seance') o[e.tache_id] = (o[e.tache_id] || 0) + (C.num(e.duree_reelle) || 0); }); return o; }
+  function spentOn(id) { return S.journal.reduce(function (s, e) { return s + (e.action === 'seance' && e.tache_id === id ? (C.num(e.duree_reelle) || 0) : 0); }, 0); }
+  function logSeance(t, min, startMs) {
+    min = Math.max(1, Math.round(min));
+    var st = new Date(startMs || (Date.now() - min * 60000));
+    push('journal', { horodatage: nowIso(), tache_id: t.id, action: 'seance', jour: C.ymd(st), debut: C.pad(st.getHours()) + ':' + C.pad(st.getMinutes()),
+      duree_prevue: t.duree_min || '', duree_reelle: min, type: t.type || '', entite: t.entite || '', prio: t.prio || '', detail: 'temps passé' });
+    return min;
+  }
   function budget(day) {
     var mv = moodOf(C.addDays(day, -1));
     return C.dayBudget(day, events(day).concat((S.evenements || []).filter(function (e) { return e.journee; })), S.taches, S.regles, P(),
-      { humeurVeille: mv ? mv.note : null, routeMin: routeLearned() });
+      { humeurVeille: mv ? mv.note : null, routeMin: routeLearned(), seances: seancesOf(day), avecSeance: avecSeance(), dejaPasse: spentMap() });
   }
   function dayLoad(day) {
     var B = budget(day);
@@ -475,7 +487,7 @@
     var phrase;
     if (B.weekend) phrase = 'Week-end : aucun travail obligatoire.' + (B.travail ? ' Tu as prévu ' + C.fmtDur(B.travail) + ' de travail.' : '') + ' Si tu veux avancer, jusqu\'à ' + C.fmtDur(B.conseilAdd) + ' sans entamer ton repos.';
     else if (B.cours) phrase = 'Journée de cours : ' + C.fmtDur(B.coursMin) + ' de présence obligatoire. Travail conseillé en plus : ' + C.fmtDur(B.conseilAdd) + (B.travail ? ', ' + C.fmtDur(B.travail) + ' prévues.' : '.');
-    else phrase = 'Journée de travail : ' + C.fmtDur(B.obligatoire) + ' obligatoires, conseillé jusqu\'à ' + C.fmtDur(B.conseille) + ' de travail. ' + (B.travail ? C.fmtDur(B.travail) + ' prévues pour l\'instant.' : 'Rien n\'est encore placé.');
+    else phrase = 'Journée de travail : ' + C.fmtDur(B.obligatoire) + ' obligatoires, conseillé jusqu\'à ' + C.fmtDur(B.conseille) + ' de travail. ' + (B.travail ? C.fmtDur(B.travailFait) + ' faites, ' + C.fmtDur(B.travailPrevu) + ' encore prévues.' : 'Rien n\'est encore placé.');
     var alertes = [];
     if (B.allege) alertes.push('Journée d\'hier notée difficile : le travail en plus conseillé est réduit de moitié.');
     if (B.depasse) alertes.push('Au-delà du conseillé : ' + C.fmtDur(B.travail - B.conseille) + ' de plus, pris sur ton repos ou tes projets.');
@@ -516,6 +528,7 @@
       h += '<section class="block now"><div class="block-head"><h2>' + title + '</h2>' + (late && !running ? '<span class="late-tag">Prévue à ' + esc(current.debut) + ', ' + C.fmtDur(now - C.toMin(current.debut)) + ' de retard</span>' : '') + '</div>' + strip(t, { time: true }) +
         '<div class="row-actions">' + (running ? '<button class="btn primary" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button><button class="btn" data-act="suite" data-id="' + esc(t.id) + '">Suite le…</button><button class="btn" data-act="stop">Arrêter le chrono</button>'
           : '<button class="btn primary" data-act="start-now" data-id="' + esc(t.id) + '">' + (current ? 'Commencer maintenant' : 'Commencer') + '</button><button class="btn" data-act="done" data-id="' + esc(t.id) + '">Déjà faite</button><button class="btn" data-act="suite" data-id="' + esc(t.id) + '">Suite le…</button>') + '</div>' +
+        (spentOn(t.id) ? '<p class="muted small">' + C.fmtDur(spentOn(t.id)) + ' déjà passées sur cette tâche, comptées dans ta journée.</p>' : '') +
         (current && late && !running ? '<p class="muted small">Commencer maintenant recale cette tâche à l\'heure actuelle et décale les suivantes de la journée.</p>' : '') + '</section>';
     }
     if (proposes) h += triageHtml(d, { free: false });
@@ -569,7 +582,7 @@
       (d === today() ? '<i class="rb-now" style="left:' + (nowMin() / 14.4) + '%"></i>' : '') +
       '</div><div class="rb-ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>';
     var leg = [
-      ['travail', B.travail, (B.weekend ? '' : 'sur ' + C.fmtDur(B.conseille) + ' conseillées')],
+      ['travail', B.travail, 'dont ' + C.fmtDur(B.travailFait) + ' faites' + (B.weekend ? '' : ', sur ' + C.fmtDur(B.conseille) + ' conseillées')],
       ['cours', B.coursMin, ''], ['revision', B.revision, B.cibleRevision ? 'objectif ' + C.fmtDur(B.cibleRevision) : ''],
       ['projets', B.projets, ''], ['sport', B.sport, ''], ['social', B.social, ''], ['perso', B.perso, ''],
       ['interstices', B.interstices, ''], ['sommeil', B.sommeil, ''], ['libre', B.libre, '']
@@ -585,7 +598,7 @@
     var h = '<section class="block inter"><div class="block-head"><h2>Interstices</h2><button class="link" data-act="inter-late">Noter après coup</button></div>';
     if (inter) h += '<p class="muted">En cours : ' + esc(inter.label) + ' depuis ' + C.fmtDur(Math.max(0, Math.round((Date.now() - inter.start) / 60000))) + '. Termine-le dans la barre du bas.</p>';
     h += '<div class="chips inter-chips">' + C.INTERSTICES.map(function (l) { return '<button class="chip" data-act="inter-go" data-v="' + esc(l) + '"' + (inter && inter.label === l ? ' aria-pressed="true"' : '') + '>' + esc(l) + '</button>'; }).join('') +
-      '<button class="chip" data-act="perso-new">' + ICON.plus + 'Temps perso</button></div>';
+      '<button class="chip" data-act="perso-new">' + ICON.plus + 'Temps perso</button><button class="chip" data-act="work-late">' + ICON.plus + 'Travail non prévu</button></div>';
     var list = dayInter(today()), tot = list.reduce(function (s, t) { return s + (C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0); }, 0);
     h += '<p class="muted small">' + (list.length ? list.length + ' aujourd\'hui, ' + C.fmtDur(tot) + ' au total. Ils sont retirés du chrono de la tâche en cours.' : 'Touche un interstice quand il commence, puis Terminé quand il s\'arrête.') + '</p>';
     return h + '</section>';
@@ -612,7 +625,7 @@
     if (ui.orgMode === 'jour') {
       var L = dayLoad(d);
       h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button>' + todayMark(d) + '</div>';
-      h += '<p class="hero-line">' + (L.cours ? 'Jour de cours. ' : '') + (L.B.weekend ? 'Week-end. ' : '') + C.fmtDur(L.charge) + ' de travail prévues, conseillé jusqu\'à ' + C.fmtDur(L.cap) + ' de travail' + (L.charge > L.cap ? ' : au-delà du conseillé.' : '.') + '</p>' + ribbonHtml(d, L.B);
+      h += '<p class="hero-line">' + (L.cours ? 'Jour de cours. ' : '') + (L.B.weekend ? 'Week-end. ' : '') + C.fmtDur(L.charge) + ' de travail (' + C.fmtDur(L.B.travailFait) + ' faites), conseillé jusqu\'à ' + C.fmtDur(L.cap) + ' de travail' + (L.charge > L.cap ? ' : au-delà du conseillé.' : '.') + '</p>' + ribbonHtml(d, L.B);
       h += '</section>';
       h += '<div class="org"><div class="org-side">' + triageHtml(d) + trayHtml(d) + '<button class="btn wide ghost" data-act="ask">Demander à Claude</button></div>' + gridHtml(d) + '</div>';
     } else {
@@ -761,7 +774,7 @@
     bar.innerHTML = h;
   }
   function startTask(t) {
-    if (timer && timer.id !== t.id) { var prev = getTask(timer.id); if (prev && prev.statut === 'En cours') saveTask(prev, { statut: 'À faire' }, { silent: true }); }
+    stopTimer(t.id);
     timer = { id: t.id, start: Date.now() }; persist();
     saveTask(t, { statut: 'En cours' }, { action: 'commence' });
     if (!t.jour || !t.debut) saveTask(t, { jour: today(), debut: fromNowRounded() });
@@ -777,6 +790,7 @@
     var undo = [{ t: t, debut: t.debut }];
     saveTask(t, { debut: C.fromMin(n) }, { detail: late ? 'commencée en retard' : 'commencée en avance' });
     moves.forEach(function (m) { var x = getTask(m.id); if (!x) return; undo.push({ t: x, debut: x.debut }); saveTask(x, { debut: m.vers }, { detail: 'recalage après retard' }); });
+    stopTimer(t.id);
     timer = { id: t.id, start: Date.now() }; persist();
     saveTask(t, { statut: 'En cours' }, { action: 'commence' });
     toast('Chrono lancé' + (moves.length ? ', ' + moves.length + ' tâche' + (moves.length > 1 ? 's décalées' : ' décalée') : ''), function () {
@@ -786,14 +800,29 @@
     });
     render();
   }
+  /* Arrêter un chrono sans finir la tâche : le temps passé est compté, la tâche reste à faire */
+  function stopTimer(exceptId) {
+    if (!timer || timer.id === exceptId) return 0;
+    var prev = getTask(timer.id), el = (Date.now() - timer.start) / 60000, st = timer.start, m = 0;
+    timer = null; persist();
+    if (prev) {
+      if (el >= 1) m = logSeance(prev, el, st);
+      if (prev.statut === 'En cours') saveTask(prev, { statut: 'À faire' }, { silent: true });
+    }
+    return m;
+  }
   function fromNowRounded() { return C.fromMin(Math.floor(nowMin() / 5) * 5); }
   function finishTask(t, reel, quiet) {
-    if (timer && timer.id === t.id) { timer = null; persist(); }
-    var changes = { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.max(1, Math.round(reel)) };
+    var st = null;
+    if (timer && timer.id === t.id) { st = timer.start; timer = null; persist(); }
+    var prior = C.isWork(t) ? spentOn(t.id) : 0;
+    if (C.isWork(t)) logSeance(t, reel, st);
+    var total = Math.max(1, Math.round(reel + prior));
+    var changes = { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: total };
     if (!t.jour) { changes.jour = today(); }
     Object.assign(t, changes); t.maj_le = nowIso(); push('tache', t);
-    log(t, 'fait', { duree_reelle: Math.max(1, Math.round(reel)) });
-    if (!quiet) toast(C.isPerso(t) ? 'Temps perso fait' : 'Faite en ' + C.fmtDur(reel) + ' (prévu ' + C.fmtDur(C.num(t.duree_min) || 30) + ')');
+    log(t, 'fait', { duree_reelle: total });
+    if (!quiet) toast(C.isPerso(t) ? 'Temps perso fait' : 'Faite en ' + C.fmtDur(total) + (prior ? ' au total' : '') + ' (prévu ' + C.fmtDur(C.num(t.duree_min) || 30) + ')');
     render();
   }
   function askDuration(t) {
@@ -801,7 +830,8 @@
     var plan = C.num(t.duree_min) || 30;
     var opts = [0.5, 0.75, 1, 1.5, 2].map(function (k) { return Math.max(5, Math.round(plan * k / 5) * 5); })
       .filter(function (v, i, a) { return a.indexOf(v) === i; });
-    openSheet('<h2>Combien de temps ça t\'a pris ?</h2><p class="muted">' + esc(t.titre) + ', prévu ' + C.fmtDur(plan) + '. Cette mesure sert à corriger tes estimations.</p><div class="chips big">' +
+    var prior = spentOn(t.id);
+    openSheet('<h2>' + (prior ? 'Combien de temps aujourd\'hui ?' : 'Combien de temps ça t\'a pris ?') + '</h2><p class="muted">' + esc(t.titre) + ', prévu ' + C.fmtDur(plan) + '.' + (prior ? ' ' + C.fmtDur(prior) + ' déjà comptées les fois précédentes, elles s\'ajoutent.' : '') + ' Cette mesure compte dans ta journée et corrige tes estimations.</p><div class="chips big">' +
       opts.map(function (v) { return '<button class="chip" data-act="dur-pick" data-v="' + v + '" aria-pressed="' + (v === plan) + '">' + C.fmtDur(v) + '</button>'; }).join('') +
       '</div><label class="field"><span>Autre durée, en minutes</span><input id="dur-custom" type="number" inputmode="numeric" min="1" value="' + plan + '"></label><div class="row-actions"><button class="btn primary" data-act="dur-ok" data-id="' + esc(t.id) + '">Valider</button><button class="btn" data-act="dur-suite" data-id="' + esc(t.id) + '">Valider, avec une suite</button><button class="btn" data-act="close">Annuler</button></div>');
   }
@@ -829,9 +859,12 @@
     var spent = C.num(fd.get('spent')) || C.num(t.duree_min) || 30;
     var root = C.rootId(t), etape = (C.num(t.etape) || 1) + 1;
     if (!C.num(t.etape)) t.etape = 1;
-    if (timer && timer.id === t.id) { timer = null; persist(); }
-    Object.assign(t, { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.round(spent), maj_le: nowIso() }); push('tache', t);
-    log(t, 'fait', { duree_reelle: Math.round(spent) });
+    var st = null;
+    if (timer && timer.id === t.id) { st = timer.start; timer = null; persist(); }
+    var prior = spentOn(t.id);
+    logSeance(t, spent, st);
+    Object.assign(t, { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.round(spent + prior), jour: t.jour || today(), maj_le: nowIso() }); push('tache', t);
+    log(t, 'fait', { duree_reelle: Math.round(spent + prior) });
     log(t, 'suite', { detail: 'suite le ' + jour });
     var child = createTask({ titre: String(fd.get('titre') || 'Suite : ' + baseTitle(t)).trim(), entite: t.entite, prio: t.prio, type: t.type,
       duree_min: C.num(fd.get('duree_min')) || 30, echeance: t.echeance && t.echeance >= jour ? t.echeance : '', jour: jour, debut: readTime(f, 'debut'),
@@ -878,6 +911,16 @@
       '<div class="field"><span>Durée</span><div class="chips">' + [5, 10, 15, 20, 30, 45, 60].map(function (v, i) { return '<label class="chip"><input type="radio" name="dur" value="' + v + '"' + (v === 10 ? ' checked' : '') + '>' + C.fmtDur(v) + '</label>'; }).join('') + '</div></div>' +
       '<div class="field"><span>Commencé à</span>' + timeSelect('debut', C.fromMin(Math.max(0, n - 10)), false) + '</div>' +
       '<div class="field"><span>Entité</span><div class="chips">' + ['Perso'].concat(C.ENTITES.filter(function (e) { return e !== 'Perso'; })).map(function (e, i) { return '<label class="chip"><input type="radio" name="entite" value="' + esc(e) + '"' + (i === 0 ? ' checked' : '') + '><i style="--e:var(--e-' + ENT_KEY[e] + ')"></i>' + esc(ENT_SHORT[e]) + '</label>'; }).join('') + '</div></div>' +
+      '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="close">Annuler</button></div></form>');
+  }
+
+  /* Travail fait sans tâche prévue : il compte dans la journée comme le reste */
+  function workLate() {
+    var n = Math.floor(nowMin() / 5) * 5;
+    openSheet('<h2>Travail non prévu</h2><p class="muted">Du travail fait en dehors de tes tâches (une urgence, une demande d\'un collègue). Il compte dans ton temps de travail du jour.</p><form data-form="work">' +
+      '<label class="field"><span>Quoi</span><input name="titre" required placeholder="Demande de JSM, urgence client…"></label>' +
+      '<div class="field"><span>Entité</span><div class="chips">' + C.ENTITES.map(function (e, i) { return '<label class="chip"><input type="radio" name="entite" value="' + esc(e) + '"' + (i === 0 ? ' checked' : '') + '><i style="--e:var(--e-' + ENT_KEY[e] + ')"></i>' + esc(ENT_SHORT[e]) + '</label>'; }).join('') + '</div></div>' +
+      '<div class="field-row"><label class="field"><span>Durée (min)</span><input name="dur" type="number" inputmode="numeric" min="5" step="5" value="60"></label><div class="field"><span>Commencé à</span>' + timeSelect('debut', C.fromMin(Math.max(0, n - 60)), false) + '</div></div>' +
       '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="close">Annuler</button></div></form>');
   }
 
@@ -1235,7 +1278,8 @@
       case 'done': if (t) { if (timer && timer.id === t.id) finishTask(t, (Date.now() - timer.start) / 60000); else askDuration(t); } break;
       case 'start': if (t) startTask(t); break;
       case 'finish': if (t && timer) finishTask(t, (Date.now() - timer.start) / 60000); else if (t) askDuration(t); break;
-      case 'stop': if (timer) { var rt = getTask(timer.id); timer = null; persist(); if (rt) saveTask(rt, { statut: 'À faire' }, { silent: true }); render(); } break;
+      case 'stop': if (timer) { var sm = stopTimer(); toast(sm ? C.fmtDur(sm) + ' comptées dans ta journée, la tâche reste à faire' : 'Chrono arrêté'); render(); } break;
+      case 'work-late': workLate(); break;
       case 'dur-pick': $all('[data-act="dur-pick"]').forEach(function (b) { b.setAttribute('aria-pressed', b === a); }); $('#dur-custom').value = a.dataset.v; break;
       case 'dur-ok': if (t) { var v = C.num($('#dur-custom').value); if (v) { closeSheet(); finishTask(t, v); } } break;
       case 'close': closeSheet(); break;
@@ -1303,6 +1347,13 @@
         if (ch.statut === 'Fait' && !wasDone) { closeSheet(); askDuration(task); render(); return; }
       } else createTask(ch);
       closeSheet(); render();
+    } else if (f.dataset.form === 'work') {
+      var wfd = new FormData(f), wd = C.num(wfd.get('dur')) || 60, wdeb = readTime(f, 'debut') || fromNowRounded();
+      var wst = C.parseYmd(today()); wst.setHours(+wdeb.split(':')[0], +wdeb.split(':')[1], 0, 0);
+      var wt = createTask({ titre: String(wfd.get('titre') || 'Travail non prévu').trim(), entite: String(wfd.get('entite') || 'ETS MAURAGE'), type: 'Rapide', prio: 2,
+        duree_min: wd, jour: today(), debut: wdeb, statut: 'Fait', fait_le: nowIso(), duree_reelle_min: wd, origine: 'Non prévu' });
+      logSeance(wt, wd, wst.getTime()); log(wt, 'fait', { duree_reelle: wd, detail: 'non prévu' });
+      closeSheet(); toast(C.fmtDur(wd) + ' de travail ajoutées à ta journée'); render();
     } else if (f.dataset.form === 'suite') {
       saveSuite(f);
     } else if (f.dataset.form === 'inter') {

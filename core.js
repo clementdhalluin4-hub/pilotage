@@ -298,7 +298,9 @@
     if (t.entite === 'Perso') return 'projets';
     return 'travail';
   }
-  /* opts.humeurVeille : note de la veille (1 à 5) ; opts.routeMin : temps de route appris par jour travaillé */
+  /* opts.humeurVeille : note de la veille (1 à 5) ; opts.routeMin : temps de route appris par jour travaillé ;
+     opts.seances : temps réellement passé ce jour-là, séance par séance ({ tache_id, entite, type, min, debut }),
+     y compris sur des tâches pas encore finies ou continuées un autre jour. */
   function dayBudget(day, events, tasks, regles, params, opts) {
     opts = opts || {};
     var w = weekday(day), cours = isCoursDay(day, events, params);
@@ -309,18 +311,30 @@
     var oblig = obl.reduce(function (s, r) { return s + r[1] - r[0]; }, 0);
     var sl = sleepSpan(params);
     var c = { travail_oblig: 0, travail_add: 0, revision: 0, projets: 0, sport: 0, social: 0, perso: 0, interstices: 0 };
-    var horsSommeil = false;
+    var horsSommeil = false, fait = 0;
+    var seances = opts.seances || [], avecSeance = {};
+    (opts.avecSeance || []).forEach(function (id) { avecSeance[id] = true; });
+    function addWork(a, d) {
+      if (a === null) { c.travail_oblig += d; return; }
+      var inside = obl.reduce(function (s, r) { return s + overlap(a, a + d, r[0], r[1]); }, 0);
+      c.travail_oblig += inside; c.travail_add += d - inside;
+    }
+    seances.forEach(function (x) {
+      var cat = category(x), d = num(x.min) || 0;
+      if (cat === 'travail') { addWork(toMin(x.debut), d); fait += d; } else if (c[cat] !== undefined) c[cat] += d;
+    });
     tasks.forEach(function (t) {
       if (t.jour !== day || t.statut === 'Supprimée') return;
+      // Le temps passé sur une tâche de travail est compté séance par séance, le jour où il a été passé
+      if (isWork(t) && t.statut === 'Fait' && avecSeance[t.id]) return;
       var d = t.statut === 'Fait' ? (num(t.duree_reelle_min) || num(t.duree_min) || 0)
-        : (isWork(t) ? correctedDuration(t, regles, params) : (num(t.duree_min) || 30));
+        : (isWork(t) ? Math.max(0, correctedDuration(t, regles, params) - ((opts.dejaPasse || {})[t.id] || 0)) : (num(t.duree_min) || 30));
       var cat = category(t);
       var a = toMin(t.debut);
       if (a !== null && (a < sl.lever || (sl.coucher > sl.lever && a + d > sl.coucher))) horsSommeil = horsSommeil || cat !== 'interstices';
       if (cat !== 'travail') { c[cat] += d; return; }
-      if (a === null) { c.travail_oblig += d; return; }
-      var inside = obl.reduce(function (s, r) { return s + overlap(a, a + d, r[0], r[1]); }, 0);
-      c.travail_oblig += inside; c.travail_add += d - inside;
+      if (t.statut === 'Fait') fait += d;
+      addWork(a, d);
     });
     // Le travail sans heure remplit d'abord l'obligatoire, le surplus devient additionnel
     if (c.travail_oblig > oblig) { c.travail_add += c.travail_oblig - oblig; c.travail_oblig = oblig; }
@@ -346,6 +360,7 @@
       obligatoire: oblig, obligSpans: obl, coursMin: coursMin, coursSpans: coursSpans,
       conseilAdd: add, conseille: oblig + add, allege: allege,
       travail: travail, travailOblig: c.travail_oblig, travailAdd: c.travail_add,
+      travailFait: fait, travailPrevu: Math.max(0, travail - fait),
       revision: c.revision, cibleRevision: cibleRev, projets: c.projets, cibleProjets: cibleProj,
       sport: c.sport, social: c.social, perso: c.perso, interstices: c.interstices,
       repas: repas, route: route, libre: Math.max(0, eveil - occupe),

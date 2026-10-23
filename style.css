@@ -568,3 +568,12 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 28px; outline: none
 .rythme { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line-2); }
 .rythme h3 { margin: 0 0 4px; font-size: 1.1rem; font-weight: 600; }
 .rythme .muted { margin: 0 0 6px; font-size: .88rem; }
+
+/* Téléphone : le flou de l'en-tête faisait de lui le repère de la barre de navigation fixe,
+   qui se retrouvait collée en haut, sous la barre d'état. Sans flou, elle reste en bas de l'écran. */
+@media (max-width: 760px) {
+  .top { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(5, 5, 10, .97); }
+  .sync { max-width: 96px; }
+  .sync[data-state="ok"] { font-size: 0; margin-right: 2px; }
+  .sync[data-state="ok"]::before { margin-right: 0; }
+}
