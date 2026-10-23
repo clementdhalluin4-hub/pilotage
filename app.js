@@ -24,15 +24,18 @@
     return { taches: [], journal: [], regles: [], plan: [], humeur: [], parametres: {}, evenements: [], base_id: '', synchro: '' };
   }
   var DEFAULT_PARAMS = {
-    journee_debut: '09:00', journee_fin: '19:00', capacite_travail_min: '300', capacite_cours_min: '60', marge: '0.3',
-    midi_debut: '12:00', midi_fin: '13:30', mot_cours: 'Cours'
+    journee_debut: '09:00', journee_fin: '19:00', capacite_cours_min: '60', marge: '0.3',
+    midi_debut: '12:00', midi_fin: '13:30', mot_cours: 'Cours',
+    obligatoire: '09:00-12:00,14:00-18:00', lever: '07:00', coucher: '23:30', envoi_mail: '08:00', tel_debut: '17:00',
+    repos_min: '90', additionnel_max_min: '180', additionnel_libre_max_min: '120', repas_soir_min: '45', trajet_min: ''
   };
 
   var cfg = LS.get('pp.cfg', null);
   var S = LS.get(cfg ? 'pp.cache' : 'pp.demo', null) || (cfg ? emptyState() : demoState());
   var queue = LS.get('pp.queue', []);
   var timer = LS.get('pp.timer', null);
-  var ui = { view: 'aujourdhui', orgDay: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: cfg ? 'chargement' : 'demo',
+  var inter = LS.get('pp.inter', null); // interstice en cours : { label, start, entite }
+  var ui = { view: 'aujourdhui', orgDay: today(), dayRef: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: cfg ? 'chargement' : 'demo',
     auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null };
 
   var ICON = {
@@ -44,7 +47,16 @@
   };
 
   function P() { var o = {}; Object.keys(DEFAULT_PARAMS).forEach(function (k) { o[k] = DEFAULT_PARAMS[k]; }); Object.keys(S.parametres || {}).forEach(function (k) { if (S.parametres[k] !== '') o[k] = S.parametres[k]; }); return o; }
-  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); }
+  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); }
+  /* Changement de jour : l'app installée sur l'iPhone reste ouverte des jours en arrière-plan,
+     la journée affichée suit donc la vraie date dès que l'on revient dessus. */
+  function checkDay() {
+    var t = today();
+    if (ui.dayRef === t) return false;
+    if (ui.orgDay === ui.dayRef || ui.orgDay < t) ui.orgDay = t;
+    ui.dayRef = t; ui.auto = {};
+    return true;
+  }
 
   /* Données de démonstration : rien de réel, pour essayer le site avant de relier la base */
   function demoState() {
@@ -74,6 +86,7 @@
     else if (op.type === 'regle') upsertLocal(S.regles, 'id', d);
     else if (op.type === 'plan') upsertLocal(S.plan, 'id', d);
     else if (op.type === 'humeur') upsertLocal(S.humeur, 'jour', d);
+    else if (op.type === 'parametre') { S.parametres = S.parametres || {}; S.parametres[d.cle] = d.valeur; }
   }
   function upsertLocal(arr, key, obj) {
     for (var i = 0; i < arr.length; i++) if (String(arr[i][key]) === String(obj[key])) { Object.assign(arr[i], obj); return arr[i]; }
@@ -122,7 +135,12 @@
   function afterLoad() {
     var t = today();
     S.taches.forEach(function (task) {
-      if (task.jour && task.jour < t && task.statut !== 'Fait' && task.statut !== 'En attente' && task.statut !== 'Supprimée') {
+      if (task.jour && task.jour < t && C.isPerso(task) && task.statut !== 'Fait' && task.statut !== 'Supprimée') {
+        // Un temps perso passé reste sur son jour : on le considère comme tenu
+        task.statut = 'Fait'; task.fait_le = task.jour + 'T23:59:00'; task.maj_le = nowIso(); push('tache', task);
+        return;
+      }
+      if (task.jour && task.jour < t && task.statut !== 'Fait' && task.statut !== 'En attente' && task.statut !== 'Supprimée' && !C.isInterstice(task)) {
         log(task, 'reporte', { detail: 'prévue le ' + task.jour + (task.debut ? ' à ' + task.debut : '') });
         task.jour = ''; task.debut = ''; task.maj_le = nowIso();
         push('tache', task);
@@ -178,22 +196,45 @@
       .sort(function (a, b) { return new Date(a.debut) - new Date(b.debut); });
   }
   function dayTasks(day) {
-    return S.taches.filter(function (t) { return t.jour === day && t.statut !== 'Supprimée'; })
+    return S.taches.filter(function (t) { return t.jour === day && t.statut !== 'Supprimée' && !C.isInterstice(t); })
       .sort(function (a, b) { return (C.toMin(a.debut) == null ? 9999 : C.toMin(a.debut)) - (C.toMin(b.debut) == null ? 9999 : C.toMin(b.debut)); });
   }
-  function dayLoad(day) {
-    var p = P(), cours = C.isCoursDay(day, S.evenements || [], p);
-    var cap = C.capacityFor(day, cours, S.regles, p);
-    var charge = 0, fait = 0;
-    dayTasks(day).forEach(function (t) {
-      if (t.statut === 'Fait') fait += C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0;
-      else charge += C.correctedDuration(t, S.regles, p);
-    });
-    return { cap: cap, charge: Math.round(charge / 5) * 5, fait: fait, cours: cours };
+  function dayInter(day) {
+    return S.taches.filter(function (t) { return t.jour === day && C.isInterstice(t) && t.statut !== 'Supprimée'; })
+      .sort(function (a, b) { return (C.toMin(a.debut) || 0) - (C.toMin(b.debut) || 0); });
   }
-  function active(t) { return t.statut === 'À faire' || t.statut === 'En cours'; }
+  // Temps de route appris : moyenne des interstices « Route » sur les jours travaillés des 3 dernières semaines
+  function routeLearned() {
+    var from = C.addDays(today(), -21), per = {};
+    S.taches.forEach(function (t) { if (C.isInterstice(t) && C.norm(t.titre) === 'route' && t.jour >= from && t.jour < today() && C.weekday(t.jour) <= 5) per[t.jour] = (per[t.jour] || 0) + (C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0); });
+    var k = Object.keys(per); if (k.length < 3) return null;
+    return Math.round(k.reduce(function (s, j) { return s + per[j]; }, 0) / k.length);
+  }
+  function moodOf(day) { var m = null; S.humeur.forEach(function (h) { if (h.jour === day) m = h; }); return m; }
+  function budget(day) {
+    var mv = moodOf(C.addDays(day, -1));
+    return C.dayBudget(day, events(day).concat((S.evenements || []).filter(function (e) { return e.journee; })), S.taches, S.regles, P(),
+      { humeurVeille: mv ? mv.note : null, routeMin: routeLearned() });
+  }
+  function dayLoad(day) {
+    var B = budget(day);
+    return { cap: B.conseille, charge: Math.round(B.travail / 5) * 5, cours: B.cours, B: B };
+  }
+  function active(t) { return (t.statut === 'À faire' || t.statut === 'En cours') && !C.isInterstice(t); }
   function overdue() { var d = today(); return S.taches.filter(function (t) { return active(t) && t.echeance && t.echeance < d; }); }
   function reportCount(id) { return S.journal.filter(function (e) { return e.tache_id === id && e.action === 'reporte'; }).length; }
+  /* Suites : une mission est la tâche d'origine et ses étapes (suite_de = id d'origine) */
+  function chainOf(t) {
+    var root = C.rootId(t);
+    return S.taches.filter(function (x) { return x.statut !== 'Supprimée' && (x.id === root || x.suite_de === root); })
+      .sort(function (a, b) { return (C.num(a.etape) || 1) - (C.num(b.etape) || 1) || (a.cree_le < b.cree_le ? -1 : 1); });
+  }
+  function nextStep(t) {
+    var ch = chainOf(t), e = C.num(t.etape) || 1, n = null;
+    ch.forEach(function (x) { if (!n && x.id !== t.id && (C.num(x.etape) || 1) > e) n = x; });
+    if (!n) S.journal.forEach(function (j) { if (j.tache_id === t.id && j.action === 'suite') n = { jour: String(j.detail || '').replace(/^suite le /, '') }; });
+    return n;
+  }
 
   /* Bandes de vol (tâches bicolores) */
   function strip(t, opts) {
@@ -205,7 +246,12 @@
     if (t.echeance) meta.push('<span class="' + (t.echeance < d && t.statut !== 'Fait' ? 'm-late' : '') + '">' + (t.echeance < d ? 'en retard, ' : 'pour ') + esc(C.shortDate(t.echeance)) + '</span>');
     var rc = reportCount(t.id); if (rc && !opts.compact) meta.push('<span class="m-late">reportée ' + rc + ' fois</span>');
     if (t.statut === 'En attente') meta.push('<span>en attente</span>');
-    return '<div class="strip' + (t.statut === 'Fait' ? ' is-done' : '') + (opts.compact ? ' is-compact' : '') + (opts.cls ? ' ' + opts.cls : '') + '" data-id="' + esc(t.id) + '" style="--p:var(--p' + prio + ');--e:var(--e-' + ent + ')"' + (opts.style ? ' data-style="1"' : '') + '>' +
+    if (C.num(t.etape) > 1) meta.push('<span class="m-suite">étape ' + esc(t.etape) + '</span>');
+    var nx = nextStep(t); if (nx && t.statut === 'Fait') meta.push('<span class="m-suite">à continuer ' + esc(nx.jour ? 'le ' + C.shortDate(nx.jour) : 'plus tard') + '</span>');
+    var pp = P();
+    if (t.type === 'Prospection mail' && t.statut !== 'Fait') meta.push('<span>envoi programmé à ' + esc(pp.envoi_mail) + '</span>');
+    if (t.type === 'Prospection tél' && t.debut && C.toMin(t.debut) < C.toMin(pp.tel_debut)) meta.push('<span class="m-late">avant ' + esc(pp.tel_debut) + '</span>');
+    return '<div class="strip' + (t.statut === 'Fait' ? ' is-done' : '') + (C.isPerso(t) ? ' is-perso' : '') + (opts.compact ? ' is-compact' : '') + (opts.cls ? ' ' + opts.cls : '') + '" data-id="' + esc(t.id) + '" style="--p:var(--p' + prio + ');--e:var(--e-' + ent + ')"' + (opts.style ? ' data-style="1"' : '') + '>' +
       '<button class="band-p" data-act="prio" aria-label="Priorité ' + PRIO_NAME[prio] + ', changer"></button>' +
       '<div class="strip-body" data-act="edit">' +
         '<div class="strip-title">' + esc(t.titre) + '</div>' +
@@ -219,6 +265,7 @@
 
   /* Rendu */
   function render() {
+    checkDay();
     var v = ui.view;
     $all('.nav a').forEach(function (a) { a.setAttribute('aria-current', a.dataset.view === v ? 'page' : 'false'); });
     var main = $('#main');
@@ -241,8 +288,8 @@
 
   /* Tri des propositions : une liste verticale, ✓ pour placer, ✕ pour refuser.
      Chaque refus est remplacé automatiquement en fonction du temps libre restant. */
-  function doneMinutes(d) { var m = 0; dayTasks(d).forEach(function (t) { if (t.statut === 'Fait') m += C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0; }); return m; }
-  function fromFor(d) { return d === today() ? Math.ceil(nowMin() / 15) * 15 : null; }
+  function doneMinutes(d) { var m = 0; dayTasks(d).forEach(function (t) { if (t.statut === 'Fait' && C.isWork(t)) m += C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0; }); return m; }
+  function fromFor(d) { return d === today() ? Math.ceil(nowMin() / 5) * 5 : null; }
   function planById(id) { for (var i = 0; i < S.plan.length; i++) if (S.plan[i].id === id) return S.plan[i]; return null; }
   function proposals(d) {
     return S.plan.filter(function (r) {
@@ -263,7 +310,7 @@
   function freeOf(d, skipPid) { return C.freeSlots(d, S.evenements || [], virtualTasks(d, skipPid), P(), fromFor(d)); }
   function refill(d) {
     var res = C.proposePlan(d, virtualTasks(d), S.evenements || [], S.regles, P(), today(),
-      { exclude: refusedIds(d), from: fromFor(d), extraUsed: d === today() ? doneMinutes(d) : 0 });
+      { exclude: refusedIds(d), from: fromFor(d), extraUsed: d === today() ? doneMinutes(d) : 0, cap: budget(d).conseille });
     var ids = [];
     res.plan.forEach(function (r) {
       var id = uid('pl'); ids.push(id);
@@ -285,7 +332,7 @@
     var out = [];
     freeOf(d, skipPid).forEach(function (f) {
       var m = f[0];
-      while (m + dur <= f[1] && out.length < 18) { out.push(m); m = Math.floor(m / 30) * 30 + 30; }
+      while (m + dur <= f[1] && out.length < 24) { out.push(m); m = Math.floor(m / 15) * 15 + 15; }
     });
     return out;
   }
@@ -330,7 +377,7 @@
     opts = opts || {};
     var props = proposals(d), free = freeOf(d);
     var freeMin = free.reduce(function (s, f) { return s + f[1] - f[0]; }, 0);
-    var h = '<section class="triage" data-day="' + d + '"><div class="tri-head"><div><p class="kicker">Propositions</p><h2>' +
+    var h = '<section class="triage" data-day="' + d + '">' + (d === today() ? moodYesterdayHtml() : '') + '<div class="tri-head"><div><p class="kicker">Propositions</p><h2>' +
       (props.length ? props.length + ' à trier' : 'Tout est trié') + '</h2></div><div class="tri-tools">' +
       '<button class="btn sm ghost" data-act="propose" data-day="' + d + '" aria-label="Proposer à nouveau">' + ICON.refresh + '<span>Regénérer</span></button>' +
       (props.length > 1 ? '<button class="btn sm primary" data-act="plan-all" data-day="' + d + '">' + ICON.check + '<span>Tout placer</span></button>' : '') + '</div></div>';
@@ -359,7 +406,32 @@
       '</div></div>';
   }
   function timesHtml(m0List, act, attrs) {
-    return '<div class="pop-times">' + m0List.map(function (m) { return '<button class="pop-time" data-act="' + act + '" ' + attrs + ' data-v="' + C.fromMin(m) + '">' + C.fromMin(m) + '</button>'; }).join('') + '</div>';
+    var first = m0List.length ? m0List[0] : Math.ceil(nowMin() / 5) * 5;
+    return '<div class="pop-times">' + m0List.map(function (m) { return '<button class="pop-time" data-act="' + act + '" ' + attrs + ' data-v="' + C.fromMin(m) + '">' + C.fromMin(m) + '</button>'; }).join('') + '</div>' +
+      '<div class="pop-precise"><span>Heure précise</span>' + timeSelect('pp', C.fromMin(first), false) + '<button class="btn sm primary" data-act="' + act + '" data-precise="1" ' + attrs + '>OK</button></div>';
+  }
+  /* Choix d'une heure par pas de 5 minutes : deux menus, l'heure puis les minutes */
+  function timeSelect(name, value, allowEmpty) {
+    var hv = value ? value.split(':')[0] : '', mv = value ? String(Math.round((+value.split(':')[1] || 0) / 5) * 5).padStart(2, '0') : '00';
+    if (mv === '60') mv = '55';
+    var hs = (allowEmpty ? '<option value=""' + (!value ? ' selected' : '') + '>Aucune</option>' : '');
+    for (var h = 5; h <= 23; h++) { var hh = C.pad(h); hs += '<option value="' + hh + '"' + (hh === hv ? ' selected' : '') + '>' + hh + ' h</option>'; }
+    var ms = '';
+    for (var m = 0; m < 60; m += 5) { var mm = C.pad(m); ms += '<option value="' + mm + '"' + (mm === mv ? ' selected' : '') + '>' + mm + '</option>'; }
+    return '<span class="tsel"><select name="' + name + '_h" aria-label="Heure">' + hs + '</select><b>:</b><select name="' + name + '_m" aria-label="Minutes">' + ms + '</select></span>';
+  }
+  function readTime(root, name) {
+    var h = root.querySelector('[name="' + name + '_h"]'), m = root.querySelector('[name="' + name + '_m"]');
+    return h && h.value ? h.value + ':' + (m ? m.value : '00') : '';
+  }
+  /* Humeur de la veille, à noter au moment de trier la journée */
+  function moodYesterdayHtml() {
+    var y = C.addDays(today(), -1);
+    if (moodOf(y) || ui.moodSkip === y) return '';
+    var labels = ['Très difficile', 'Difficile', 'Correcte', 'Facile', 'Très facile'];
+    return '<div class="mood-y"><div class="mood-y-head"><p class="kicker">Hier, ' + esc(C.longDate(y)) + '</p><button class="link sm" data-act="mood-skip">Plus tard</button></div><h3>Comment s\'est passée ta journée d\'hier ?</h3><input id="mood-y-why" class="mood-y-why" placeholder="Pourquoi ? (facultatif)" autocomplete="off"><div class="faces sm" role="radiogroup" aria-label="Note de la veille">' +
+      [1, 2, 3, 4, 5].map(function (n) { return '<button role="radio" aria-checked="false" class="face" data-act="mood-y" data-n="' + n + '" aria-label="' + labels[n - 1] + '">' + face(n) + '<span>' + labels[n - 1] + '</span></button>'; }).join('') +
+      '</div></div>';
   }
   function placePop(anchor, t, d) {
     var dur = C.num(t.duree_min) || 30, opts = startOptions(d, dur);
@@ -399,46 +471,57 @@
   }
 
   function viewAujourdhui() {
-    var d = today(), p = P(), L = dayLoad(d), tasks = dayTasks(d), evs = events(d);
-    var weekend = C.weekday(d) > 5;
-    var reste = Math.max(0, L.cap - L.charge);
+    var d = today(), p = P(), L = dayLoad(d), B = L.B, tasks = dayTasks(d), evs = events(d);
     var phrase;
-    if (weekend) phrase = 'Week-end : aucune tâche de travail prévue par défaut.';
-    else if (!tasks.length) phrase = (L.cours ? 'Journée de cours : ' : 'Journée de travail : ') + 'rien n\'est encore placé. Tu disposes de ' + C.fmtDur(L.cap) + ' de tâches.';
-    else if (L.charge > L.cap) phrase = 'Journée trop chargée : ' + C.fmtDur(L.charge) + ' prévues pour ' + C.fmtDur(L.cap) + ' disponibles. Allège avant de commencer.';
-    else phrase = (L.cours ? 'Journée de cours : ' : 'Journée de travail : ') + C.fmtDur(L.charge) + ' prévues sur ' + C.fmtDur(L.cap) + '. Il reste de la place pour ' + C.fmtDur(reste) + '.';
-    var pct = L.cap ? Math.min(140, Math.round(L.charge / L.cap * 100)) : 0;
+    if (B.weekend) phrase = 'Week-end : aucun travail obligatoire.' + (B.travail ? ' Tu as prévu ' + C.fmtDur(B.travail) + ' de travail.' : '') + ' Si tu veux avancer, jusqu\'à ' + C.fmtDur(B.conseilAdd) + ' sans entamer ton repos.';
+    else if (B.cours) phrase = 'Journée de cours : ' + C.fmtDur(B.coursMin) + ' de présence obligatoire. Travail conseillé en plus : ' + C.fmtDur(B.conseilAdd) + (B.travail ? ', ' + C.fmtDur(B.travail) + ' prévues.' : '.');
+    else phrase = 'Journée de travail : ' + C.fmtDur(B.obligatoire) + ' obligatoires, conseillé jusqu\'à ' + C.fmtDur(B.conseille) + ' de travail. ' + (B.travail ? C.fmtDur(B.travail) + ' prévues pour l\'instant.' : 'Rien n\'est encore placé.');
+    var alertes = [];
+    if (B.allege) alertes.push('Journée d\'hier notée difficile : le travail en plus conseillé est réduit de moitié.');
+    if (B.depasse) alertes.push('Au-delà du conseillé : ' + C.fmtDur(B.travail - B.conseille) + ' de plus, pris sur ton repos ou tes projets.');
+    if (B.horsSommeil) alertes.push('Une tâche empiète sur ton sommeil (coucher ' + esc(p.coucher) + ', lever ' + esc(p.lever) + ').');
 
-    var now = nowMin(), nextTask = null, running = timer ? getTask(timer.id) : null;
-    tasks.forEach(function (t) { if (!nextTask && t.statut !== 'Fait' && t.debut && C.toMin(t.debut) + (C.num(t.duree_min) || 30) > now) nextTask = t; });
+    var now = nowMin(), running = timer ? getTask(timer.id) : null, current = null, late = false, nextTask = null;
+    tasks.forEach(function (t) {
+      if (!C.isWork(t) || t.statut === 'Fait' || !t.debut) return;
+      var a = C.toMin(t.debut);
+      if (a <= now && !current) current = t;
+      else if (a > now && !nextTask) nextTask = t;
+    });
+    if (current) late = now - C.toMin(current.debut) > 5;
+    var focus = running || current || nextTask;
 
     var rows = [];
     evs.forEach(function (e) {
       var s = new Date(e.debut), f = new Date(e.fin);
       rows.push({ m: e.journee ? -1 : s.getHours() * 60 + s.getMinutes(), html: '<div class="agenda-row ev"><span class="t">' + (e.journee ? 'Journée' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes())) + '</span><div class="ev-box' + evCls(e) + '"><span>' + (e.source === 'ecole' ? '<i class="ev-tag">Cours</i>' : '') + esc(e.titre) + (evInfo(e) ? '<small class="ev-info">' + esc(evInfo(e)) + '</small>' : '') + '</span><span class="ev-end">' + (e.journee ? '' : 'jusqu\'à ' + C.pad(f.getHours()) + ':' + C.pad(f.getMinutes())) + '</span></div></div>' });
     });
-    if (!weekend && p.midi_debut) rows.push({ m: C.toMin(p.midi_debut), html: '<div class="agenda-row"><span class="t">' + esc(p.midi_debut) + '</span><div class="protect">Midi protégé jusqu\'à ' + esc(p.midi_fin) + '</div></div>' });
+    if (!B.weekend && p.midi_debut) rows.push({ m: C.toMin(p.midi_debut), html: '<div class="agenda-row"><span class="t">' + esc(p.midi_debut) + '</span><div class="protect">Midi protégé jusqu\'à ' + esc(p.midi_fin) + '</div></div>' });
     tasks.forEach(function (t) { rows.push({ m: t.debut ? C.toMin(t.debut) : 2000, html: '<div class="agenda-row"><span class="t">' + (t.debut ? esc(t.debut) : 'Sans heure') + '</span>' + strip(t, { check: t.statut !== 'Fait' }) + '</div>' }); });
+    dayInter(d).forEach(function (t) { rows.push({ m: C.toMin(t.debut) || 0, html: '<div class="agenda-row"><span class="t">' + esc(t.debut) + '</span><div class="inter-row"><span>' + esc(t.titre) + '</span><em>' + C.fmtDur(C.num(t.duree_reelle_min) || C.num(t.duree_min)) + '</em><button class="link sm" data-act="inter-del" data-id="' + esc(t.id) + '" aria-label="Retirer cet interstice">Retirer</button></div></div>' }); });
     rows.sort(function (a, b) { return a.m - b.m; });
 
     var od = overdue();
     var sugg = C.suggestions(C.stats(S.journal, p, d), S.regles, p).slice(0, 3);
     var accepted = S.regles.filter(function (r) { return r.statut === 'acceptee'; }).length;
     var proposes = proposals(d).length;
-    var mood = null; S.humeur.forEach(function (h) { if (h.jour === d) mood = h; });
+    var mood = moodOf(d);
 
     var h = '';
-    h += '<section class="hero"><p class="hero-kicker">Aujourd\'hui</p><h1>' + esc(cap1(C.longDate(d))) + '</h1><p class="hero-line">' + esc(phrase) + '</p>';
-    if (!weekend) h += '<div class="gauge' + (L.charge > L.cap ? ' is-over' : '') + '" role="img" aria-label="Charge ' + pct + ' % de la capacité"><div class="gauge-fill" style="width:' + Math.min(100, pct) + '%"></div>' + (pct > 100 ? '<div class="gauge-over" style="width:' + (pct - 100) + '%"></div>' : '') + '</div><div class="gauge-legend"><span>' + C.fmtDur(L.charge) + ' prévues, marge comprise</span><span>' + C.fmtDur(L.cap) + ' disponibles</span></div>';
-    h += '</section>';
+    h += '<section class="hero"><p class="hero-kicker">Aujourd\'hui</p><h1>' + esc(cap1(C.longDate(d))) + '</h1><p class="hero-line">' + esc(phrase) + '</p>' + ribbonHtml(d, B) +
+      (alertes.length ? '<div class="alerts">' + alertes.map(function (x) { return '<p>' + x + '</p>'; }).join('') + '</div>' : '') + '</section>';
 
-    if (running || nextTask) {
-      var t = running || nextTask;
-      h += '<section class="block now"><h2>' + (running ? 'En cours' : 'Ensuite') + '</h2>' + strip(t, { time: true }) +
-        '<div class="row-actions">' + (running ? '<button class="btn primary" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button><button class="btn" data-act="stop">Arrêter le chrono</button>'
-          : '<button class="btn primary" data-act="start" data-id="' + esc(t.id) + '">Commencer</button><button class="btn" data-act="done" data-id="' + esc(t.id) + '">Déjà faite</button>') + '</div></section>';
+    if (focus) {
+      var t = focus, title = running ? 'En cours' : (current ? 'Tâche actuelle' : 'Ensuite');
+      h += '<section class="block now"><div class="block-head"><h2>' + title + '</h2>' + (late && !running ? '<span class="late-tag">Prévue à ' + esc(current.debut) + ', ' + C.fmtDur(now - C.toMin(current.debut)) + ' de retard</span>' : '') + '</div>' + strip(t, { time: true }) +
+        '<div class="row-actions">' + (running ? '<button class="btn primary" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button><button class="btn" data-act="suite" data-id="' + esc(t.id) + '">Suite le…</button><button class="btn" data-act="stop">Arrêter le chrono</button>'
+          : '<button class="btn primary" data-act="start-now" data-id="' + esc(t.id) + '">' + (current ? 'Commencer maintenant' : 'Commencer') + '</button><button class="btn" data-act="done" data-id="' + esc(t.id) + '">Déjà faite</button><button class="btn" data-act="suite" data-id="' + esc(t.id) + '">Suite le…</button>') + '</div>' +
+        (current && late && !running ? '<p class="muted small">Commencer maintenant recale cette tâche à l\'heure actuelle et décale les suivantes de la journée.</p>' : '') + '</section>';
     }
     if (proposes) h += triageHtml(d, { free: false });
+    else { var my = moodYesterdayHtml(); if (my) h += '<section class="block triage">' + my + '</section>'; }
+
+    h += interBlockHtml();
 
     h += '<section class="block"><div class="block-head"><h2>Au programme</h2><a class="link" href="#organisation">Organiser</a></div>';
     h += rows.length ? '<div class="agenda">' + rows.map(function (r) { return r.html; }).join('') + '</div>' : '<p class="empty">Rien de prévu. Ouvre Organisation pour placer tes tâches ou demander un plan.</p>';
@@ -461,6 +544,52 @@
     S._sugg = sugg;
     return h;
   }
+
+  /* Schéma de la journée sur 24 h : ce que la journée contient, sans rapport écrit */
+  var CAT = {
+    sommeil: ['Sommeil', 'var(--c-sleep)'], travail: ['Travail', 'var(--c-work)'], cours: ['Cours', 'var(--cyan)'],
+    revision: ['Révision', 'var(--e-m)'], projets: ['Projets perso', 'var(--e-p)'], sport: ['Sport', 'var(--e-s)'],
+    social: ['Social', 'var(--e-so)'], perso: ['Temps perso', 'var(--c-perso)'], interstices: ['Interstices', 'var(--c-inter)'],
+    agenda: ['Agenda', 'var(--c-agenda)'], repas: ['Repas', 'var(--c-meal)'], libre: ['Libre', 'transparent']
+  };
+  function ribbonHtml(d, B) {
+    var segs = [], p = P();
+    function add(a, b, cat, title) { a = Math.max(0, a); b = Math.min(1440, b); if (b > a) segs.push({ a: a, b: b, cat: cat, title: title }); }
+    if (B.coucher > B.lever) { add(0, B.lever, 'sommeil', 'Sommeil'); add(B.coucher, 1440, 'sommeil', 'Sommeil'); }
+    else add(B.coucher, B.lever, 'sommeil', 'Sommeil');
+    if (!B.weekend) add(C.toMin(p.midi_debut), C.toMin(p.midi_fin), 'repas', 'Midi');
+    events(d).forEach(function (e) { if (e.journee) return; var s = new Date(e.debut), f = new Date(e.fin); add(s.getHours() * 60 + s.getMinutes(), f.getHours() * 60 + f.getMinutes(), e.source === 'ecole' ? 'cours' : 'agenda', e.titre); });
+    dayTasks(d).concat(dayInter(d)).forEach(function (t) {
+      if (!t.debut) return; var a = C.toMin(t.debut), dur = t.statut === 'Fait' ? (C.num(t.duree_reelle_min) || C.num(t.duree_min) || 30) : (C.num(t.duree_min) || 30);
+      add(a, a + dur, C.category(t), t.titre);
+    });
+    var html = '<div class="ribbon" role="img" aria-label="Schéma de la journée sur 24 heures">' +
+      B.obligSpans.map(function (r) { return '<i class="rb-oblig" style="left:' + (r[0] / 14.4) + '%;width:' + ((r[1] - r[0]) / 14.4) + '%"></i>'; }).join('') +
+      segs.map(function (g) { return '<i class="rb-seg" title="' + esc(g.title + ', ' + C.fromMin(g.a) + '–' + C.fromMin(g.b)) + '" style="left:' + (g.a / 14.4) + '%;width:' + ((g.b - g.a) / 14.4) + '%;--c:' + CAT[g.cat][1] + '"></i>'; }).join('') +
+      (d === today() ? '<i class="rb-now" style="left:' + (nowMin() / 14.4) + '%"></i>' : '') +
+      '</div><div class="rb-ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>';
+    var leg = [
+      ['travail', B.travail, (B.weekend ? '' : 'sur ' + C.fmtDur(B.conseille) + ' conseillées')],
+      ['cours', B.coursMin, ''], ['revision', B.revision, B.cibleRevision ? 'objectif ' + C.fmtDur(B.cibleRevision) : ''],
+      ['projets', B.projets, ''], ['sport', B.sport, ''], ['social', B.social, ''], ['perso', B.perso, ''],
+      ['interstices', B.interstices, ''], ['sommeil', B.sommeil, ''], ['libre', B.libre, '']
+    ].filter(function (x) { return x[1] > 0 || x[0] === 'travail'; });
+    html += '<div class="rb-legend">' + leg.map(function (x) {
+      return '<span class="rb-key' + (x[0] === 'travail' && B.depasse ? ' is-over' : '') + '"><i style="--c:' + CAT[x[0]][1] + '"></i>' + CAT[x[0]][0] + ' <b>' + C.fmtDur(x[1]) + '</b>' + (x[2] ? ' <em>' + x[2] + '</em>' : '') + '</span>';
+    }).join('') + '</div>';
+    return html;
+  }
+
+  /* Interstices : café, route, appel reçu, chronométrés ou notés après coup */
+  function interBlockHtml() {
+    var h = '<section class="block inter"><div class="block-head"><h2>Interstices</h2><button class="link" data-act="inter-late">Noter après coup</button></div>';
+    if (inter) h += '<p class="muted">En cours : ' + esc(inter.label) + ' depuis ' + C.fmtDur(Math.max(0, Math.round((Date.now() - inter.start) / 60000))) + '. Termine-le dans la barre du bas.</p>';
+    h += '<div class="chips inter-chips">' + C.INTERSTICES.map(function (l) { return '<button class="chip" data-act="inter-go" data-v="' + esc(l) + '"' + (inter && inter.label === l ? ' aria-pressed="true"' : '') + '>' + esc(l) + '</button>'; }).join('') +
+      '<button class="chip" data-act="perso-new">' + ICON.plus + 'Temps perso</button></div>';
+    var list = dayInter(today()), tot = list.reduce(function (s, t) { return s + (C.num(t.duree_reelle_min) || C.num(t.duree_min) || 0); }, 0);
+    h += '<p class="muted small">' + (list.length ? list.length + ' aujourd\'hui, ' + C.fmtDur(tot) + ' au total. Ils sont retirés du chrono de la tâche en cours.' : 'Touche un interstice quand il commence, puis Terminé quand il s\'arrête.') + '</p>';
+    return h + '</section>';
+  }
   function cap1(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   function learningStatus() {
@@ -482,16 +611,20 @@
     var h = '<section class="org-head"><div class="seg" role="tablist"><button role="tab" aria-selected="' + (ui.orgMode === 'jour') + '" data-act="mode" data-mode="jour">Jour</button><button role="tab" aria-selected="' + (ui.orgMode === 'semaine') + '" data-act="mode" data-mode="semaine">Semaine</button></div>';
     if (ui.orgMode === 'jour') {
       var L = dayLoad(d);
-      h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button>' + (d !== today() ? '<button class="link" data-act="day" data-delta="0">Aujourd\'hui</button>' : '') + '</div>';
-      h += '<p class="hero-line">' + (L.cours ? 'Jour de cours. ' : '') + C.fmtDur(L.charge) + ' prévues sur ' + C.fmtDur(L.cap) + (L.charge > L.cap ? ', au-delà de ta capacité.' : '.') + '</p>';
+      h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button>' + todayMark(d) + '</div>';
+      h += '<p class="hero-line">' + (L.cours ? 'Jour de cours. ' : '') + (L.B.weekend ? 'Week-end. ' : '') + C.fmtDur(L.charge) + ' de travail prévues, conseillé jusqu\'à ' + C.fmtDur(L.cap) + ' de travail' + (L.charge > L.cap ? ' : au-delà du conseillé.' : '.') + '</p>' + ribbonHtml(d, L.B);
       h += '</section>';
       h += '<div class="org"><div class="org-side">' + triageHtml(d) + trayHtml(d) + '<button class="btn wide ghost" data-act="ask">Demander à Claude</button></div>' + gridHtml(d) + '</div>';
     } else {
       var mon = C.mondayOf(d);
-      h += '<div class="daynav"><button class="icon" data-act="week" data-delta="-7" aria-label="Semaine précédente">‹</button><h1>Semaine du ' + esc(C.longDate(mon).replace(/^lundi /, '')) + '</h1><button class="icon" data-act="week" data-delta="7" aria-label="Semaine suivante">›</button></div></section>';
+      h += '<div class="daynav"><button class="icon" data-act="week" data-delta="-7" aria-label="Semaine précédente">‹</button><h1>Semaine du ' + esc(C.longDate(mon).replace(/^lundi /, '')) + '</h1><button class="icon" data-act="week" data-delta="7" aria-label="Semaine suivante">›</button>' + (C.mondayOf(today()) !== mon ? '<button class="today-mark is-link" data-act="day" data-delta="0">Aujourd\'hui</button>' : '') + '</div></section>';
       h += weekHtml(mon);
     }
     return h;
+  }
+  // Repère « Aujourd'hui » toujours visible : pastille quand on y est, lien pour y revenir sinon
+  function todayMark(d) {
+    return d === today() ? '<span class="today-mark">Aujourd\'hui</span>' : '<button class="today-mark is-link" data-act="day" data-delta="0">Aujourd\'hui</button>';
   }
   function trayHtml(d) {
     var f = ui.filtre;
@@ -550,6 +683,11 @@
       h += it.html(top, hgt);
       prevEnd = Math.max(prevEnd, it.a + it.dur); prevBottom = Math.max(prevBottom, top + hgt + 2);
     });
+    dayInter(d).forEach(function (t) {
+      var a = C.toMin(t.debut); if (a === null) return;
+      var dur = C.num(t.duree_reelle_min) || C.num(t.duree_min) || 5;
+      h += '<div class="inter-block" style="top:' + yOf(a) + 'px;height:' + Math.max(6, dur / 60 * HPX) + 'px" title="' + esc(t.titre + ', ' + C.fmtDur(dur)) + '"><span>' + esc(t.titre) + '</span></div>';
+    });
     if (d === today()) h += '<div class="nowline" style="top:' + yOf(nowMin()) + 'px"></div>';
     h += '<div class="ghost-slot" hidden></div>';
     return h + '</div></div>';
@@ -563,7 +701,7 @@
     var h = '<div class="week">';
     for (var i = 0; i < 7; i++) {
       var d = C.addDays(mon, i), L = dayLoad(d), pct = L.cap ? Math.min(100, Math.round(L.charge / L.cap * 100)) : 0;
-      h += '<div class="wday' + (d === today() ? ' is-today' : '') + '" data-drop="day" data-day="' + d + '"><div class="wday-head"><button class="link" data-act="openday" data-day="' + d + '">' + esc(cap1(C.shortDate(d))) + '</button><span class="muted">' + (L.cap ? C.fmtDur(L.charge) + ' sur ' + C.fmtDur(L.cap) : '') + '</span></div>' +
+      h += '<div class="wday' + (d === today() ? ' is-today' : '') + '" data-drop="day" data-day="' + d + '"><div class="wday-head">' + (d === today() ? '<span class="today-mark sm">Aujourd\'hui</span>' : '') + '<button class="link" data-act="openday" data-day="' + d + '">' + esc(cap1(C.shortDate(d))) + '</button><span class="muted">' + (L.cap || L.charge ? C.fmtDur(L.charge) + ' sur ' + C.fmtDur(L.cap) + ' conseillées' : '') + '</span></div>' +
         (L.cap ? '<div class="gauge sm' + (L.charge > L.cap ? ' is-over' : '') + '"><div class="gauge-fill" style="width:' + pct + '%"></div></div>' : '');
       events(d).forEach(function (e) { var s = new Date(e.debut); h += '<div class="wev' + evCls(e) + '">' + (e.journee ? '' : C.pad(s.getHours()) + ':' + C.pad(s.getMinutes()) + ' ') + esc(e.titre) + (e.salle ? '<small class="ev-info">' + esc(e.salle) + '</small>' : '') + '</div>'; });
       dayTasks(d).forEach(function (t) { h += strip(t, { compact: true, time: true }); });
@@ -576,7 +714,7 @@
   function viewListes() {
     var f = ui.filtre, d = today();
     var list = S.taches.filter(function (t) {
-      if (t.statut === 'Supprimée') return false;
+      if (t.statut === 'Supprimée' || C.isInterstice(t)) return false;
       if (f.statut === 'actives' && !active(t)) return false;
       if (f.statut === 'attente' && t.statut !== 'En attente') return false;
       if (f.statut === 'faites' && t.statut !== 'Fait') return false;
@@ -586,7 +724,7 @@
       if (f.q && C.norm(t.titre + ' ' + (t.contexte || '')).indexOf(C.norm(f.q)) === -1) return false;
       return true;
     });
-    var h = '<section class="org-head"><h1>Listes</h1><form class="quick" data-form="quick"><input id="quick" autocomplete="off" placeholder="Ajouter : relance fournisseur demain 10 min 1001F p3" aria-label="Ajouter une tâche"><button class="btn primary" type="submit">Ajouter</button></form><div id="quick-preview" class="quick-preview"></div>';
+    var h = '<section class="org-head"><h1>Listes</h1><form class="quick" data-form="quick"><input id="quick" autocomplete="off" placeholder="Ajouter : relance fournisseur demain 10 min 1001F p3" aria-label="Ajouter une tâche"><button class="btn primary" type="submit">Ajouter</button></form><p class="quick-tip">Écris une phrase et touche Ajouter, ou touche Ajouter sans rien écrire pour ouvrir la fiche complète.</p><div id="quick-preview" class="quick-preview"></div>';
     h += '<div class="filters"><div class="seg">' + [['actives', 'À faire'], ['attente', 'En attente'], ['retard', 'En retard'], ['faites', 'Faites']].map(function (s) { return '<button aria-pressed="' + (f.statut === s[0]) + '" data-act="statut" data-v="' + s[0] + '">' + s[1] + '</button>'; }).join('') + '</div>' +
       '<input class="search" id="search" type="search" placeholder="Rechercher" value="' + esc(f.q) + '" aria-label="Rechercher une tâche">' +
       '<div class="seg">' + [['entite', 'Par entité'], ['prio', 'Par priorité']].map(function (g) { return '<button aria-pressed="' + (ui.groupe === g[0]) + '" data-act="groupe" data-v="' + g[0] + '">' + g[1] + '</button>'; }).join('') + '</div></div>';
@@ -605,48 +743,151 @@
     return h;
   }
 
-  /* Chrono */
+  /* Chrono : tâche en cours et interstice en cours, une ligne chacun */
   function renderTimerBar() {
     var bar = $('#timerbar');
     var t = timer ? getTask(timer.id) : null;
-    if (!t) { bar.hidden = true; return; }
+    if (!t && !inter) { bar.hidden = true; return; }
     bar.hidden = false;
-    var el = Math.max(0, Math.round((Date.now() - timer.start) / 60000));
-    bar.innerHTML = '<span class="tb-dot"></span><span class="tb-title">' + esc(t.titre) + '</span><span class="tb-time">' + C.fmtDur(el) + ' sur ' + C.fmtDur(C.num(t.duree_min) || 30) + '</span><button class="btn primary sm" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button>';
+    var h = '';
+    if (inter) {
+      var ie = Math.max(0, Math.round((Date.now() - inter.start) / 60000));
+      h += '<div class="tb-row is-inter"><span class="tb-dot"></span><span class="tb-title">Interstice : ' + esc(inter.label) + '</span><span class="tb-time">' + C.fmtDur(ie) + '</span><button class="btn sm" data-act="inter-cancel">Annuler</button><button class="btn primary sm" data-act="inter-stop">Terminé</button></div>';
+    }
+    if (t) {
+      var el = Math.max(0, Math.round((Date.now() - timer.start) / 60000));
+      h += '<div class="tb-row"><span class="tb-dot"></span><span class="tb-title">' + esc(t.titre) + '</span><span class="tb-time">' + C.fmtDur(el) + ' sur ' + C.fmtDur(C.num(t.duree_min) || 30) + '</span><button class="btn primary sm" data-act="finish" data-id="' + esc(t.id) + '">J\'ai terminé</button></div>';
+    }
+    bar.innerHTML = h;
   }
   function startTask(t) {
     if (timer && timer.id !== t.id) { var prev = getTask(timer.id); if (prev && prev.statut === 'En cours') saveTask(prev, { statut: 'À faire' }, { silent: true }); }
     timer = { id: t.id, start: Date.now() }; persist();
     saveTask(t, { statut: 'En cours' }, { action: 'commence' });
-    if (!t.jour) saveTask(t, { jour: today(), debut: fromNowRounded() });
+    if (!t.jour || !t.debut) saveTask(t, { jour: today(), debut: fromNowRounded() });
     toast('Chrono lancé pour « ' + t.titre + ' »');
     render();
   }
-  function fromNowRounded() { return C.fromMin(Math.floor(nowMin() / 15) * 15); }
-  function finishTask(t, reel) {
+  /* Commencer maintenant : la tâche ratée est recalée à l'heure actuelle, les suivantes glissent juste après */
+  function startNow(t) {
+    var d = today(), n = Math.floor(nowMin() / 5) * 5;
+    if (t.jour !== d || !t.debut || C.toMin(t.debut) === n) { startTask(t); return; }
+    var late = n > C.toMin(t.debut);
+    var moves = late ? C.cascade(d, t.id, n, S.taches, S.evenements || [], P()) : [];
+    var undo = [{ t: t, debut: t.debut }];
+    saveTask(t, { debut: C.fromMin(n) }, { detail: late ? 'commencée en retard' : 'commencée en avance' });
+    moves.forEach(function (m) { var x = getTask(m.id); if (!x) return; undo.push({ t: x, debut: x.debut }); saveTask(x, { debut: m.vers }, { detail: 'recalage après retard' }); });
+    timer = { id: t.id, start: Date.now() }; persist();
+    saveTask(t, { statut: 'En cours' }, { action: 'commence' });
+    toast('Chrono lancé' + (moves.length ? ', ' + moves.length + ' tâche' + (moves.length > 1 ? 's décalées' : ' décalée') : ''), function () {
+      timer = null; persist();
+      undo.forEach(function (u) { saveTask(u.t, { debut: u.debut, statut: 'À faire' }, { detail: 'annulation' }); });
+      render();
+    });
+    render();
+  }
+  function fromNowRounded() { return C.fromMin(Math.floor(nowMin() / 5) * 5); }
+  function finishTask(t, reel, quiet) {
     if (timer && timer.id === t.id) { timer = null; persist(); }
     var changes = { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.max(1, Math.round(reel)) };
     if (!t.jour) { changes.jour = today(); }
     Object.assign(t, changes); t.maj_le = nowIso(); push('tache', t);
     log(t, 'fait', { duree_reelle: Math.max(1, Math.round(reel)) });
-    toast('Faite en ' + C.fmtDur(reel) + ' (prévu ' + C.fmtDur(C.num(t.duree_min) || 30) + ')');
+    if (!quiet) toast(C.isPerso(t) ? 'Temps perso fait' : 'Faite en ' + C.fmtDur(reel) + ' (prévu ' + C.fmtDur(C.num(t.duree_min) || 30) + ')');
     render();
   }
   function askDuration(t) {
+    if (C.isPerso(t)) { finishTask(t, C.num(t.duree_min) || 30); return; }
     var plan = C.num(t.duree_min) || 30;
     var opts = [0.5, 0.75, 1, 1.5, 2].map(function (k) { return Math.max(5, Math.round(plan * k / 5) * 5); })
       .filter(function (v, i, a) { return a.indexOf(v) === i; });
     openSheet('<h2>Combien de temps ça t\'a pris ?</h2><p class="muted">' + esc(t.titre) + ', prévu ' + C.fmtDur(plan) + '. Cette mesure sert à corriger tes estimations.</p><div class="chips big">' +
       opts.map(function (v) { return '<button class="chip" data-act="dur-pick" data-v="' + v + '" aria-pressed="' + (v === plan) + '">' + C.fmtDur(v) + '</button>'; }).join('') +
-      '</div><label class="field"><span>Autre durée, en minutes</span><input id="dur-custom" type="number" inputmode="numeric" min="1" value="' + plan + '"></label><div class="row-actions"><button class="btn primary" data-act="dur-ok" data-id="' + esc(t.id) + '">Valider</button><button class="btn" data-act="close">Annuler</button></div>');
+      '</div><label class="field"><span>Autre durée, en minutes</span><input id="dur-custom" type="number" inputmode="numeric" min="1" value="' + plan + '"></label><div class="row-actions"><button class="btn primary" data-act="dur-ok" data-id="' + esc(t.id) + '">Valider</button><button class="btn" data-act="dur-suite" data-id="' + esc(t.id) + '">Valider, avec une suite</button><button class="btn" data-act="close">Annuler</button></div>');
+  }
+
+  /* Suite de mission : l'étape du jour est faite, la mission continue à une autre date (ce n'est pas un report) */
+  function baseTitle(t) { return String(t.titre || '').replace(/^(suite|retour|étape \d+)\s*:\s*/i, ''); }
+  function openSuite(t, reel) {
+    var d = today(), nextMon = C.addDays(C.mondayOf(d), 7);
+    var spent = reel != null ? Math.max(1, Math.round(reel)) : (C.num(t.duree_min) || 30);
+    var choices = [[C.addDays(d, 1), 'Demain'], [C.addDays(d, 2), 'Après-demain'], [nextMon, 'Lundi prochain']];
+    openSheet('<h2>Suite de la mission</h2><p class="muted">« ' + esc(t.titre) + ' » est marquée faite pour aujourd\'hui. La mission continue à la date choisie, sans compter comme un report.</p>' +
+      '<form data-form="suite" data-id="' + esc(t.id) + '">' +
+      '<label class="field"><span>Prochaine étape</span><input name="titre" required value="' + esc('Suite : ' + baseTitle(t)) + '"></label>' +
+      '<div class="field"><span>À continuer le</span><div class="chips">' + choices.map(function (c, i) { return '<label class="chip"><input type="radio" name="jour_choix" value="' + c[0] + '"' + (i === 0 ? ' checked' : '') + '>' + c[1] + ' <small>' + esc(C.shortDate(c[0])) + '</small></label>'; }).join('') +
+      '<label class="chip"><input type="radio" name="jour_choix" value="autre">Autre date</label></div><input name="jour_autre" type="date" min="' + C.addDays(d, 1) + '" aria-label="Autre date"></div>' +
+      '<div class="field-row"><div class="field"><span>À (facultatif)</span>' + timeSelect('debut', '', true) + '</div>' +
+      '<label class="field"><span>Durée prévue (min)</span><input name="duree_min" type="number" inputmode="numeric" min="5" step="5" value="' + (t.type === 'Relance' || t.type === 'Rapide' ? 10 : (C.num(t.duree_min) || 30)) + '"></label></div>' +
+      '<label class="field"><span>Temps passé aujourd\'hui (min)</span><input name="spent" type="number" inputmode="numeric" min="1" value="' + spent + '"></label>' +
+      '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer la suite</button><button class="btn" type="button" data-act="close">Annuler</button></div></form>');
+  }
+  function saveSuite(f) {
+    var t = getTask(f.dataset.id); if (!t) return;
+    var fd = new FormData(f), choix = fd.get('jour_choix'), jour = choix === 'autre' ? String(fd.get('jour_autre') || '') : String(choix || '');
+    if (!jour) { toast('Choisis la date de la suite'); return; }
+    var spent = C.num(fd.get('spent')) || C.num(t.duree_min) || 30;
+    var root = C.rootId(t), etape = (C.num(t.etape) || 1) + 1;
+    if (!C.num(t.etape)) t.etape = 1;
+    if (timer && timer.id === t.id) { timer = null; persist(); }
+    Object.assign(t, { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.round(spent), maj_le: nowIso() }); push('tache', t);
+    log(t, 'fait', { duree_reelle: Math.round(spent) });
+    log(t, 'suite', { detail: 'suite le ' + jour });
+    var child = createTask({ titre: String(fd.get('titre') || 'Suite : ' + baseTitle(t)).trim(), entite: t.entite, prio: t.prio, type: t.type,
+      duree_min: C.num(fd.get('duree_min')) || 30, echeance: t.echeance && t.echeance >= jour ? t.echeance : '', jour: jour, debut: readTime(f, 'debut'),
+      contexte: t.contexte, origine: t.origine, suite_de: root, etape: etape });
+    closeSheet();
+    toast('Suite prévue le ' + C.shortDate(jour), function () {
+      saveTask(child, { statut: 'Supprimée', jour: '', debut: '' }, { action: 'supprime', detail: 'suite annulée' });
+      saveTask(t, { statut: 'À faire', fait_le: '', duree_reelle_min: '' }, { action: 'modifie', detail: 'suite annulée' });
+      render();
+    });
+    render();
+  }
+
+  /* Interstices */
+  function interStart(label) {
+    if (inter) interStop(true);
+    inter = { label: label, start: Date.now(), entite: label === 'Appel reçu' ? 'ETS MAURAGE' : 'Perso' }; persist();
+    toast(label + ' : chrono lancé'); render();
+  }
+  function interSave(label, startMs, dur, entite) {
+    var s0 = new Date(startMs), d = C.ymd(s0);
+    var task = { id: uid('i'), titre: label, statut: 'Fait', prio: 4, entite: entite || 'Perso', type: C.INTERSTICE, duree_min: dur, echeance: '',
+      jour: d, debut: C.pad(s0.getHours()) + ':' + C.pad(s0.getMinutes()), ordre: 0, contexte: '', origine: 'Interstice',
+      cree_le: nowIso(), maj_le: nowIso(), fait_le: nowIso(), duree_reelle_min: dur };
+    push('tache', task); log(task, 'interstice', { duree_reelle: dur, detail: label });
+    return task;
+  }
+  function interStop(silent) {
+    if (!inter) return;
+    var dur = Math.max(1, Math.round((Date.now() - inter.start) / 60000)), it = inter;
+    inter = null;
+    interSave(it.label, it.start, dur, it.entite);
+    // Le temps de l'interstice ne compte pas dans la tâche chronométrée
+    var paused = timer && timer.start < it.start ? getTask(timer.id) : null;
+    if (paused) timer.start += dur * 60000;
+    persist();
+    if (!silent) toast(it.label + ' : ' + C.fmtDur(dur) + (paused ? ', retiré du chrono de « ' + paused.titre + ' »' : ''));
+    render();
+  }
+  function interLate() {
+    var n = Math.floor(nowMin() / 5) * 5;
+    openSheet('<h2>Noter un interstice</h2><p class="muted">Un temps qui s\'est glissé dans ta journée, pour l\'analyse de tes journées.</p><form data-form="inter">' +
+      '<div class="field"><span>Quoi</span><div class="chips">' + C.INTERSTICES.map(function (l, i) { return '<label class="chip"><input type="radio" name="label" value="' + esc(l) + '"' + (i === 0 ? ' checked' : '') + '>' + esc(l) + '</label>'; }).join('') + '</div></div>' +
+      '<div class="field"><span>Durée</span><div class="chips">' + [5, 10, 15, 20, 30, 45, 60].map(function (v, i) { return '<label class="chip"><input type="radio" name="dur" value="' + v + '"' + (v === 10 ? ' checked' : '') + '>' + C.fmtDur(v) + '</label>'; }).join('') + '</div></div>' +
+      '<div class="field"><span>Commencé à</span>' + timeSelect('debut', C.fromMin(Math.max(0, n - 10)), false) + '</div>' +
+      '<div class="field"><span>Entité</span><div class="chips">' + ['Perso'].concat(C.ENTITES.filter(function (e) { return e !== 'Perso'; })).map(function (e, i) { return '<label class="chip"><input type="radio" name="entite" value="' + esc(e) + '"' + (i === 0 ? ' checked' : '') + '><i style="--e:var(--e-' + ENT_KEY[e] + ')"></i>' + esc(ENT_SHORT[e]) + '</label>'; }).join('') + '</div></div>' +
+      '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="close">Annuler</button></div></form>');
   }
 
   /* Éditeur */
   function openEditor(t, preset) {
     var isNew = !t;
     t = t || Object.assign({ titre: '', prio: 2, entite: 'ETS MAURAGE', type: 'Fond', duree_min: 30, statut: 'À faire', echeance: '', jour: '', debut: '', contexte: '' }, preset || {});
-    var h = '<h2>' + (isNew ? 'Nouvelle tâche' : 'Modifier la tâche') + '</h2><form data-form="edit" data-id="' + esc(t.id || '') + '">' +
-      '<label class="field"><span>Titre</span><input name="titre" required value="' + esc(t.titre) + '"></label>' +
+    var chain = isNew ? [] : chainOf(t);
+    var h = '<h2>' + (isNew ? (C.isPerso(t) ? 'Nouveau temps perso' : 'Nouvelle tâche') : 'Modifier ' + (C.isPerso(t) ? 'le temps perso' : 'la tâche')) + '</h2><form data-form="edit" data-id="' + esc(t.id || '') + '">' +
+      '<label class="field"><span>Titre</span><input name="titre" required value="' + esc(t.titre) + '" placeholder="' + (C.isPerso(t) ? 'Piscine, repas chez Nana…' : '') + '"></label>' +
       '<div class="field"><span>Priorité</span><div class="chips">' + [1, 2, 3, 4].map(function (n) { return '<label class="chip"><input type="radio" name="prio" value="' + n + '"' + (+t.prio === n ? ' checked' : '') + '><i style="--e:var(--p' + n + ')"></i>' + PRIO_NAME[n] + '</label>'; }).join('') + '</div></div>' +
       '<div class="field"><span>Entité</span><div class="chips">' + C.ENTITES.map(function (e) { return '<label class="chip"><input type="radio" name="entite" value="' + esc(e) + '"' + (t.entite === e ? ' checked' : '') + '><i style="--e:var(--e-' + ENT_KEY[e] + ')"></i>' + esc(ENT_SHORT[e]) + '</label>'; }).join('') + '</div></div>' +
       '<div class="field-row"><label class="field"><span>Type</span><select name="type">' + C.TYPES.map(function (x) { return '<option' + (t.type === x ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
@@ -654,10 +895,12 @@
       '<div class="field-row"><label class="field"><span>Échéance</span><input name="echeance" type="date" value="' + esc(t.echeance) + '"></label>' +
       '<label class="field"><span>Statut</span><select name="statut">' + C.STATUTS.map(function (x) { return '<option' + (t.statut === x ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label></div>' +
       '<div class="field-row"><label class="field"><span>Prévue le</span><input name="jour" type="date" value="' + esc(t.jour) + '"></label>' +
-      '<label class="field"><span>À</span><input name="debut" type="time" step="900" value="' + esc(t.debut) + '"></label></div>' +
+      '<div class="field"><span>À</span>' + timeSelect('debut', t.debut, true) + '</div></div>' +
       '<label class="field"><span>Contexte</span><textarea name="contexte" rows="3">' + esc(t.contexte) + '</textarea></label>' +
-      (t.notion_url ? '<p class="muted"><a href="' + esc(t.notion_url) + '" target="_blank" rel="noopener">Ancienne fiche Notion</a></p>' : '') +
-      '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="close">Annuler</button>' + (isNew ? '' : '<button class="btn danger" type="button" data-act="delete" data-id="' + esc(t.id) + '">Supprimer</button>') + '</div></form>';
+      (chain.length > 1 ? '<div class="field"><span>Fil de la mission</span><ol class="chain">' + chain.map(function (x) {
+        return '<li class="' + (x.id === t.id ? 'is-cur' : '') + (x.statut === 'Fait' ? ' is-done' : '') + '"><b>' + esc(x.titre) + '</b><em>' + (x.statut === 'Fait' ? 'faite' + (x.fait_le ? ' le ' + esc(C.shortDate(String(x.fait_le).slice(0, 10))) : '') : (x.jour ? 'prévue le ' + esc(C.shortDate(x.jour)) : 'à placer')) + '</em></li>';
+      }).join('') + '</ol></div>' : '') +
+      '<div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button>' + (!isNew && active(t) && C.isWork(t) ? '<button class="btn" type="button" data-act="suite" data-id="' + esc(t.id) + '">Suite le…</button>' : '') + '<button class="btn" type="button" data-act="close">Annuler</button>' + (isNew ? '' : '<button class="btn danger" type="button" data-act="delete" data-id="' + esc(t.id) + '">Supprimer</button>') + '</div></form>';
     openSheet(h);
   }
 
@@ -724,7 +967,7 @@
   function askGo() {
     var q = ($('#ask-q') || {}).value || '';
     var base = S.base_id ? 'https://docs.google.com/spreadsheets/d/' + S.base_id : 'ma base Google Sheets « Poste de pilotage — base »';
-    var prompt = 'TRINITY (Poste de pilotage). Ma base de tâches : ' + base + ' (onglets Taches, Journal, Regles, Plan, Humeur, Parametres). Nous sommes ' + C.longDate(today()) + ', il est ' + C.fromMin(nowMin()) + '. ' + q.trim() +
+    var prompt = 'TRINITY (Poste de pilotage). Ma base de tâches : ' + base + ' (onglets Taches, Journal, Regles, Plan, Humeur, Parametres, Consignes ; l\'onglet Consignes contient mes règles d\'organisation). Nous sommes ' + C.longDate(today()) + ', il est ' + C.fromMin(nowMin()) + '. ' + q.trim() +
       ' Si tu modifies mon planning, écris tes propositions dans l\'onglet Plan (statut propose, auteur claude) pour que je les valide sur le site.';
     window.open('https://claude.ai/new?q=' + encodeURIComponent(prompt), '_blank', 'noopener');
     closeSheet();
@@ -734,6 +977,14 @@
     openSheet('<h2>Réglages</h2><form data-form="cfg"><label class="field"><span>Adresse de la passerelle (Apps Script)</span><input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(cfg ? cfg.url : '') + '"></label>' +
       '<label class="field"><span>Clé</span><input name="key" autocomplete="off" value="' + esc(cfg ? cfg.key : '') + '"></label>' +
       '<div class="row-actions"><button class="btn primary" type="submit">Relier la base</button>' + (cfg ? '<button class="btn" type="button" data-act="unlink">Délier</button>' : '') + '<button class="btn" type="button" data-act="close">Fermer</button></div></form>' +
+      (function () {
+        var p = P();
+        return '<form data-form="rythme" class="rythme"><h3>Mon rythme</h3><p class="muted">Sert au schéma de la journée et au travail conseillé.</p>' +
+          '<div class="field-row"><div class="field"><span>Lever</span>' + timeSelect('lever', p.lever, false) + '</div><div class="field"><span>Coucher</span>' + timeSelect('coucher', p.coucher, false) + '</div></div>' +
+          '<div class="field-row"><div class="field"><span>Envoi des mails de prospection</span>' + timeSelect('envoi_mail', p.envoi_mail, false) + '</div><div class="field"><span>Appels de prospection après</span>' + timeSelect('tel_debut', p.tel_debut, false) + '</div></div>' +
+          '<div class="field-row"><label class="field"><span>Travail en plus, au plus (min)</span><input name="additionnel_max_min" type="number" inputmode="numeric" min="0" step="15" value="' + esc(p.additionnel_max_min) + '"></label><label class="field"><span>Repos minimum (min)</span><input name="repos_min" type="number" inputmode="numeric" min="0" step="15" value="' + esc(p.repos_min) + '"></label></div>' +
+          '<div class="row-actions"><button class="btn primary sm" type="submit">Enregistrer mon rythme</button></div></form>';
+      })() +
       (S.base_id ? '<p class="muted"><a href="https://docs.google.com/spreadsheets/d/' + esc(S.base_id) + '" target="_blank" rel="noopener">Ouvrir la base Google Sheets</a></p>' : '') +
       '<p class="muted">Sur téléphone, ajoute le site à l\'écran d\'accueil depuis le menu de partage du navigateur : il s\'ouvrira en plein écran.</p>' +
       '<p class="muted">Dernière synchronisation : ' + esc(S.synchro || 'jamais') + '. Envois en attente : ' + queue.length + '.</p>');
@@ -812,7 +1063,7 @@
     if (grid) {
       var gr = grid.getBoundingClientRect();
       var t = getTask(drag.id), dur = C.num(t && t.duree_min) || 30;
-      var min = H0 * 60 + Math.round(((y - drag.offY - gr.top) / HPX * 60) / 15) * 15;
+      var min = H0 * 60 + Math.round(((y - drag.offY - gr.top) / HPX * 60) / 5) * 5;
       min = Math.max(H0 * 60, Math.min(H1 * 60 - dur, min));
       gs.hidden = false; gs.style.top = yOf(min) + 'px'; gs.style.height = Math.max(22, dur / 60 * HPX) + 'px'; gs.textContent = C.fromMin(min);
       drag.target = { kind: 'grid', day: grid.dataset.day, debut: C.fromMin(min) };
@@ -865,7 +1116,7 @@
       var pr = S.plan.filter(function (r) { return r.tache_id === t.id && r.jour === tg.day && r.statut === 'propose'; });
       pr.forEach(function (r) { r.statut = 'accepte'; push('plan', r); });
       saveTask(t, { jour: tg.day, debut: tg.debut, statut: t.statut === 'En attente' ? 'À faire' : t.statut });
-      toast('Placée ' + C.shortDate(tg.day) + ' à ' + tg.debut);
+      toast(telWarn(t, tg.debut) || ('Placée ' + C.shortDate(tg.day) + ' à ' + tg.debut));
     } else if (tg.kind === 'day') {
       if (t.jour !== tg.day) saveTask(t, { jour: tg.day, debut: t.debut && !conflict(tg.day, t) ? t.debut : '' });
     } else if (tg.kind === 'tray') {
@@ -874,6 +1125,10 @@
       reorder(t, tg);
     }
     render();
+  }
+  function telWarn(t, debut) {
+    var p = P();
+    return t.type === 'Prospection tél' && C.toMin(debut) < C.toMin(p.tel_debut) ? 'Placée à ' + debut + '. Rappel : les appels de prospection passent mieux après ' + p.tel_debut : '';
   }
   function conflict(day, t) {
     var a = C.toMin(t.debut), b = a + (C.num(t.duree_min) || 30);
@@ -905,7 +1160,7 @@
   }
   function moveResize(e) {
     e.preventDefault();
-    var dur = Math.max(15, Math.round((resize.dur0 + (e.clientY - resize.y0) / HPX * 60) / 15) * 15);
+    var dur = Math.max(5, Math.round((resize.dur0 + (e.clientY - resize.y0) / HPX * 60) / 5) * 5);
     resize.dur = dur; resize.slot.style.height = Math.max(22, dur / 60 * HPX) + 'px';
     var lbl = resize.slot.querySelector('.strip-dur'); if (lbl) lbl.textContent = C.fmtDur(dur);
   }
@@ -924,7 +1179,7 @@
     var gridEl = e.target.closest('[data-drop="grid"]');
     if (gridEl && !e.target.closest('.slot, .ev-block, [data-act]')) {
       var gr = gridEl.getBoundingClientRect(), gd = gridEl.dataset.day;
-      var gm = H0 * 60 + Math.floor((e.clientY - gr.top) / HPX * 60 / 15) * 15;
+      var gm = H0 * 60 + Math.floor((e.clientY - gr.top) / HPX * 60 / 5) * 5;
       var inF = freeOf(gd).filter(function (f) { return f[0] <= gm && gm < f[1]; })[0];
       openPicker(gd, gm, inF ? inF[1] : gm + 60);
       return;
@@ -941,7 +1196,7 @@
         else if (t && !a.closest('#pop')) openEditor(t);
         break;
       case 'place-at':
-        if (t) { var pv = placeAt(t, a.dataset.day, a.dataset.v), pt = t; closePop(); toast('Placée à ' + a.dataset.v, function () { saveTask(pt, pv, { detail: 'annulation' }); render(); }); render(); }
+        if (t) { var pvv = a.dataset.precise ? readTime($('#pop'), 'pp') : a.dataset.v; var pv = placeAt(t, a.dataset.day, pvv), pt = t; closePop(); toast(telWarn(t, pvv) || ('Placée à ' + pvv), function () { saveTask(pt, pv, { detail: 'annulation' }); render(); }); render(); }
         break;
       case 'tri-time':
         var tr = planById(a.dataset.pid), tt = tr && getTask(tr.tache_id);
@@ -950,7 +1205,18 @@
           openPop(a, '<div class="pop-title">Placer à une autre heure, ' + C.fmtDur(tdur) + '</div>' + (topts.length ? timesHtml(topts, 'tri-set', 'data-pid="' + esc(tr.id) + '"') : '<p class="pop-none">Aucun autre créneau libre.</p>'));
         }
         break;
-      case 'tri-set': var ts = planById(a.dataset.pid); if (ts) { ts.debut = a.dataset.v; closePop(); decide(ts.id, true); } break;
+      case 'tri-set': var ts = planById(a.dataset.pid); if (ts) { ts.debut = a.dataset.precise ? readTime($('#pop'), 'pp') : a.dataset.v; closePop(); decide(ts.id, true); } break;
+      case 'start-now': if (t) startNow(t); break;
+      case 'suite': if (t) { closeSheet(); openSuite(t, timer && timer.id === t.id ? (Date.now() - timer.start) / 60000 : null); } break;
+      case 'dur-suite': if (t) { var dsv = C.num($('#dur-custom').value); closeSheet(); openSuite(t, dsv); } break;
+      case 'inter-go': if (inter && inter.label === a.dataset.v) interStop(); else interStart(a.dataset.v); break;
+      case 'inter-stop': interStop(); break;
+      case 'inter-cancel': inter = null; persist(); toast('Interstice annulé'); render(); break;
+      case 'inter-late': interLate(); break;
+      case 'inter-del': if (t) { saveTask(t, { statut: 'Supprimée' }, { action: 'supprime', detail: 'interstice retiré' }); toast('Interstice retiré'); render(); } break;
+      case 'perso-new': openEditor(null, { type: C.PERSO, entite: 'Sport', prio: 3, duree_min: 60, jour: ui.view === 'organisation' ? ui.orgDay : today() }); break;
+      case 'mood-y': saveMood(+a.dataset.n, true, C.addDays(today(), -1), ($('#mood-y-why') || {}).value || ''); render(); break;
+      case 'mood-skip': ui.moodSkip = C.addDays(today(), -1); render(); break;
       case 'tri-open': var to = planById(a.dataset.pid); if (to && getTask(to.tache_id)) openEditor(getTask(to.tache_id)); break;
       case 'gap': openPicker(a.dataset.day, +a.dataset.a, +a.dataset.b); break;
       case 'pick': if (t && ui.pick) pickTask(t); break;
@@ -1003,29 +1269,31 @@
       case 'new': openEditor(null); break;
     }
   });
-  function saveMood(n, withToast) {
-    var why = ($('#mood-why') || {}).value || '';
-    push('humeur', { jour: today(), note: n, pourquoi: why.trim(), horodatage: nowIso() });
-    if (withToast) toast('Journée notée');
+  function saveMood(n, withToast, jour, why) {
+    if (why == null) why = ($('#mood-why') || {}).value || '';
+    push('humeur', { jour: jour || today(), note: n, pourquoi: String(why).trim(), horodatage: nowIso() });
+    if (withToast) toast(jour && jour !== today() ? 'Journée d\'hier notée' : 'Journée notée');
   }
 
   document.addEventListener('submit', function (e) {
     var f = e.target; e.preventDefault();
     if (f.dataset.form === 'quick') {
-      var q = $('#quick').value.trim(); if (!q) return;
+      var q = $('#quick').value.trim(); if (!q) { openEditor(null); return; }
       var p = C.parseQuick(q, today());
       var fields = { titre: p.titre || q };
       ['jour', 'debut', 'entite', 'type'].forEach(function (k) { if (p[k]) fields[k] = p[k]; });
       if (p.duree_min) fields.duree_min = p.duree_min; if (p.prio) fields.prio = p.prio;
       if (fields.debut && !fields.jour) fields.jour = today();
-      if (!fields.type) fields.type = /relanc|rappel|appel/i.test(q) ? 'Relance' : 'Fond';
-      if (!fields.duree_min) fields.duree_min = fields.type === 'Relance' ? 10 : 30;
+      if (!fields.type) fields.type = (fields.entite === 'Sport' || fields.entite === 'Social') ? C.PERSO : (/relanc|rappel|appel/i.test(q) ? 'Relance' : 'Fond');
+      if (!fields.duree_min) fields.duree_min = fields.type === 'Relance' ? 10 : (fields.type === C.PERSO ? 60 : 30);
+      if (fields.type === C.PERSO && !p.prio) fields.prio = 3;
       var t = createTask(fields);
       $('#quick').value = ''; $('#quick-preview').innerHTML = '';
       toast('Ajoutée : ' + t.titre); render(); setTimeout(function () { var i = $('#quick'); if (i) i.focus(); }, 0);
     } else if (f.dataset.form === 'edit') {
       var fd = new FormData(f), ch = {};
-      ['titre', 'type', 'echeance', 'statut', 'jour', 'debut', 'contexte', 'entite'].forEach(function (k) { ch[k] = (fd.get(k) || '').toString(); });
+      ['titre', 'type', 'echeance', 'statut', 'jour', 'contexte', 'entite'].forEach(function (k) { ch[k] = (fd.get(k) || '').toString(); });
+      ch.debut = readTime(f, 'debut');
       ch.prio = +fd.get('prio') || 2; ch.duree_min = C.num(fd.get('duree_min')) || 30;
       if (ch.debut && !ch.jour) ch.jour = today();
       var id = f.dataset.id, task = id ? getTask(id) : null;
@@ -1035,6 +1303,20 @@
         if (ch.statut === 'Fait' && !wasDone) { closeSheet(); askDuration(task); render(); return; }
       } else createTask(ch);
       closeSheet(); render();
+    } else if (f.dataset.form === 'suite') {
+      saveSuite(f);
+    } else if (f.dataset.form === 'inter') {
+      var ifd = new FormData(f), dur = C.num(ifd.get('dur')) || 10, deb = readTime(f, 'debut') || fromNowRounded();
+      var st = C.parseYmd(today()); st.setHours(+deb.split(':')[0], +deb.split(':')[1], 0, 0);
+      interSave(String(ifd.get('label') || 'Imprévu'), st.getTime(), dur, String(ifd.get('entite') || 'Perso'));
+      closeSheet(); toast('Interstice noté : ' + C.fmtDur(dur)); render();
+    } else if (f.dataset.form === 'rythme') {
+      var rp = {};
+      ['lever', 'coucher', 'envoi_mail', 'tel_debut'].forEach(function (k) { var v = readTime(f, k); if (v) rp[k] = v; });
+      ['additionnel_max_min', 'repos_min'].forEach(function (k) { var v = C.num(f[k].value); if (v !== null) rp[k] = String(v); });
+      var notes = { lever: 'Heure de lever habituelle', coucher: 'Heure de coucher habituelle', envoi_mail: 'Heure d\'envoi programmé des mails de prospection', tel_debut: 'Pas d\'appel de prospection avant cette heure', additionnel_max_min: 'Travail en plus conseillé, au plus, un jour travaillé', repos_min: 'Repos minimum gardé chaque jour' };
+      Object.keys(rp).forEach(function (k) { push('parametre', { cle: k, valeur: rp[k], note: notes[k] || '' }); });
+      closeSheet(); toast('Rythme enregistré'); render();
     } else if (f.dataset.form === 'cfg') {
       var url = f.url.value.trim(), key = f.key.value.trim();
       if (!/^https:\/\/script\.google\.com\//.test(url)) { toast('L\'adresse doit commencer par https://script.google.com/'); return; }
@@ -1086,8 +1368,15 @@
   }
   window.addEventListener('hashchange', route);
   document.addEventListener('click', function (e) { var f = e.target.closest('[data-filter="retard"]'); if (f) { ui.filtre.statut = 'retard'; } }, true);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); } });
-  setInterval(function () { if (!document.hidden) { if (timer) renderTimerBar(); var nl = $('.nowline'); if (nl) nl.style.top = yOf(nowMin()) + 'px'; } }, 30000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { checkDay(); load(); } });
+  window.addEventListener('pageshow', function () { if (checkDay()) load(); });
+  setInterval(function () {
+    if (document.hidden) return;
+    if (checkDay()) { load(); return; }
+    if (timer || inter) renderTimerBar();
+    var nl = $('.nowline'); if (nl) nl.style.top = yOf(nowMin()) + 'px';
+    var rn = $('.rb-now'); if (rn) rn.style.left = (nowMin() / 14.4) + '%';
+  }, 30000);
   setInterval(function () { if (!document.hidden && cfg && !drag && !resize && !$('#sheet').open) load(); }, 120000);
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { /* hors ligne indisponible */ });

@@ -4,7 +4,15 @@
   'use strict';
 
   var ENTITES = ['ETS MAURAGE', 'LRB', '1001 Fenêtres', '1001 Travaux', 'Fili Floc', 'Master', 'Perso', 'Sport', 'Social'];
-  var TYPES = ['Fond', 'Rapide', 'Relance', 'Terrain', 'Rendez-vous'];
+  var TYPES = ['Fond', 'Rapide', 'Relance', 'Terrain', 'Rendez-vous', 'Prospection mail', 'Prospection tél', 'Temps perso'];
+  /* Genres hors tâche de travail : les temps perso se placent comme des tâches mais ne comptent pas
+     dans le travail ; les interstices (café, route, appel reçu) servent seulement à l'analyse. */
+  var PERSO = 'Temps perso', INTERSTICE = 'Interstice';
+  var INTERSTICES = ['Café', 'Route', 'Appel reçu', 'Pause', 'Imprévu'];
+  function isPerso(t) { return t && t.type === PERSO; }
+  function isInterstice(t) { return t && t.type === INTERSTICE; }
+  function isWork(t) { return t && !isPerso(t) && !isInterstice(t); }
+  function rootId(t) { return (t && (t.suite_de || t.id)) || ''; }
   var STATUTS = ['À faire', 'En cours', 'En attente', 'Fait'];
   var PRIOS = { 1: 'Rouge', 2: 'Orange', 3: 'Vert', 4: 'Noir' };
   var PRIO_LABELS = { 1: 'P1 cette semaine', 2: 'P2 à planifier', 3: 'P3 à regrouper', 4: 'P4 plus tard' };
@@ -45,7 +53,9 @@
     [/^(social|amis)$/, 'Social']
   ];
   var TYPE_WORDS = [[/^(relance|relancer|rappeler)$/, 'Relance'], [/^(rapide)$/, 'Rapide'], [/^(fond)$/, 'Fond'],
-                    [/^(terrain|deplacement)$/, 'Terrain'], [/^(rdv|rendez-vous)$/, 'Rendez-vous']];
+                    [/^(terrain|deplacement)$/, 'Terrain'], [/^(rdv|rendez-vous)$/, 'Rendez-vous'],
+                    [/^(emailing|e-mailing|prospmail)$/, 'Prospection mail'], [/^(phoning|prosptel)$/, 'Prospection tél'],
+                    [/^(bloc|perso-bloc)$/, 'Temps perso']];
   var DAY_WORDS = { lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6, dimanche: 7 };
 
   function parseQuick(text, today) {
@@ -68,6 +78,10 @@
         out.jour = cand; continue;
       }
       if (t === 'a' && /^\d{1,2}h(\d{2})?$/.test(next)) { continue; }
+      if (t === 'prospection' && !out.type && /^(mail|mails|email|e-mail|tel|telephone|telephonique|appels?)$/.test(next)) {
+        out.type = /^(mail|mails|email|e-mail)$/.test(next) ? 'Prospection mail' : 'Prospection tél';
+        keep.push(raw); keep.push(tokens[i + 1]); i++; continue;
+      }
       if ((m = t.match(/^(\d+)\s?(min|mn|m)$/))) { out.duree_min = +m[1]; continue; }
       if ((m = t.match(/^(\d+)$/)) && /^(min|mn|minutes?)$/.test(next)) { out.duree_min = +m[1]; i++; continue; }
       if ((m = t.match(/^(\d{1,2})h(\d{2})?$/))) {
@@ -84,7 +98,7 @@
       if (t === 'noir') { out.prio = 4; continue; }
       var hit = null;
       ENT_WORDS.forEach(function (e) { if (!hit && e[0].test(t)) hit = e[1]; });
-      if (hit && !out.entite) { out.entite = hit; continue; }
+      if (hit && !out.entite) { out.entite = hit; if (/^(piscine|course)$/.test(t)) keep.push(raw); continue; }
       var ty = null;
       TYPE_WORDS.forEach(function (e) { if (!ty && e[0].test(t)) ty = e[1]; });
       if (ty && !out.type) { out.type = ty; keep.push(raw); continue; }
@@ -116,6 +130,8 @@
   function stats(journal, params, today) {
     var marge = num(params.marge); if (marge === null) marge = 0.3;
     var res = { coef: {}, capacite: {}, creneaux: {}, glisse: {}, n_faits: 0 };
+    // Les temps perso et les interstices n'entrent pas dans l'apprentissage des tâches
+    journal = journal.filter(function (e) { return e.type !== PERSO && e.type !== INTERSTICE; });
     var done = journal.filter(function (e) { return e.action === 'fait' && num(e.duree_reelle) && num(e.duree_prevue); });
     res.n_faits = done.length;
     ['type', 'entite'].forEach(function (dim) {
@@ -202,20 +218,7 @@
         preuve: c.n + ' tâches terminées, médiane des durées réelles divisées par les durées prévues'
       });
     });
-    var base = num(params.capacite_travail_min) || 300;
-    Object.keys(st.capacite).forEach(function (w) {
-      var c = st.capacite[w];
-      if (c.n < SEUILS.jours_capacite || +w > 5) return;
-      var m = Math.round(c.moyenne / 15) * 15;
-      if (Math.abs(m - base) / base < 0.2) return;
-      var cle = 'capacite:' + w;
-      if (already(cle, m)) return;
-      out.push({
-        cle: cle, categorie: 'capacite', valeur: String(m),
-        texte: 'Le ' + JOURS[w] + ', tu réalises en moyenne ' + fmtDur(m) + ' de tâches. Régler la capacité du ' + JOURS[w] + ' sur ' + fmtDur(m) + ' au lieu de ' + fmtDur(base) + ' ?',
-        preuve: c.n + ' ' + JOURS[w] + 's mesurés sur les 4 dernières semaines'
-      });
-    });
+    // Plus de plafond fixe : la capacité est calculée chaque jour (dayBudget), elle ne s'apprend plus ici.
     // Meilleur créneau pour le fond
     var fond = Object.keys(st.creneaux).filter(function (k) { return k.indexOf('Fond:') === 0; });
     var totalFond = fond.reduce(function (s, k) { return s + st.creneaux[k].places; }, 0);
@@ -262,12 +265,92 @@
     return d * coefFor(task, regles, marge);
   }
   function capacityFor(day, isCours, regles, params) {
+    // Ancien plafond, gardé pour la compatibilité : la page utilise dayBudget().conseille
     if (isCours) return num(params.capacite_cours_min) || 60;
-    var w = weekday(day);
-    if (w > 5) return 0;
-    var r = acceptedRule(regles, 'capacite:' + w);
-    if (r && num(r.valeur)) return num(r.valeur);
-    return num(params.capacite_travail_min) || 300;
+    return weekday(day) > 5 ? 0 : 420;
+  }
+
+  /* Journée sur 24 h : sommeil, travail obligatoire, travail conseillé et le reste de la vie */
+  function ranges(spec) {
+    return String(spec || '').split(',').map(function (r) {
+      var p = r.trim().split('-'); var a = toMin(p[0]), b = toMin(p[1]);
+      return a === null || b === null || b <= a ? null : [a, b];
+    }).filter(Boolean);
+  }
+  function overlap(a0, a1, b0, b1) { return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); }
+  function evSpan(e, day) {
+    if (!e.debut || e.journee) return null;
+    var s = new Date(e.debut), f = new Date(e.fin || e.debut);
+    if (ymd(s) !== day) return null;
+    var a = s.getHours() * 60 + s.getMinutes(), b = ymd(f) === day ? f.getHours() * 60 + f.getMinutes() : 1440;
+    return b > a ? [a, b] : null;
+  }
+  function sleepSpan(params) {
+    var lever = toMin(params.lever || '07:00'), coucher = toMin(params.coucher || '23:30');
+    return { lever: lever, coucher: coucher, duree: (lever - coucher + 1440) % 1440 || 480 };
+  }
+  function category(t) {
+    if (isInterstice(t)) return 'interstices';
+    if (t.entite === 'Sport') return 'sport';
+    if (t.entite === 'Social') return 'social';
+    if (isPerso(t)) return 'perso';
+    if (t.entite === 'Master') return 'revision';
+    if (t.entite === 'Perso') return 'projets';
+    return 'travail';
+  }
+  /* opts.humeurVeille : note de la veille (1 à 5) ; opts.routeMin : temps de route appris par jour travaillé */
+  function dayBudget(day, events, tasks, regles, params, opts) {
+    opts = opts || {};
+    var w = weekday(day), cours = isCoursDay(day, events, params);
+    var coursSpans = events.filter(function (e) { return e.source === 'ecole'; }).map(function (e) { return evSpan(e, day); }).filter(Boolean);
+    var coursMin = coursSpans.reduce(function (s, x) { return s + x[1] - x[0]; }, 0);
+    var workday = w <= 5 && !cours;
+    var obl = workday ? ranges(params.obligatoire || '09:00-12:00,14:00-18:00') : [];
+    var oblig = obl.reduce(function (s, r) { return s + r[1] - r[0]; }, 0);
+    var sl = sleepSpan(params);
+    var c = { travail_oblig: 0, travail_add: 0, revision: 0, projets: 0, sport: 0, social: 0, perso: 0, interstices: 0 };
+    var horsSommeil = false;
+    tasks.forEach(function (t) {
+      if (t.jour !== day || t.statut === 'Supprimée') return;
+      var d = t.statut === 'Fait' ? (num(t.duree_reelle_min) || num(t.duree_min) || 0)
+        : (isWork(t) ? correctedDuration(t, regles, params) : (num(t.duree_min) || 30));
+      var cat = category(t);
+      var a = toMin(t.debut);
+      if (a !== null && (a < sl.lever || (sl.coucher > sl.lever && a + d > sl.coucher))) horsSommeil = horsSommeil || cat !== 'interstices';
+      if (cat !== 'travail') { c[cat] += d; return; }
+      if (a === null) { c.travail_oblig += d; return; }
+      var inside = obl.reduce(function (s, r) { return s + overlap(a, a + d, r[0], r[1]); }, 0);
+      c.travail_oblig += inside; c.travail_add += d - inside;
+    });
+    // Le travail sans heure remplit d'abord l'obligatoire, le surplus devient additionnel
+    if (c.travail_oblig > oblig) { c.travail_add += c.travail_oblig - oblig; c.travail_oblig = oblig; }
+    var repas = (w <= 5 ? Math.max(0, toMin(params.midi_fin || '13:30') - toMin(params.midi_debut || '12:00')) : 60) + (num(params.repas_soir_min) || 45);
+    var route = workday ? (num(opts.routeMin) || num(params.trajet_min) || 0) : 0;
+    var eveil = 1440 - sl.duree;
+    var cibleRev = Math.round((num(params.master_h_semaine) || 0) * 60 / 7);
+    var cibleProj = Math.round((num(params.projets_h_semaine) || 0) * 60 / 7);
+    var repos = num(params.repos_min) || 90;
+    var fixe = oblig + coursMin + repas + route + c.sport + c.social + c.perso + c.interstices;
+    var reste = eveil - fixe - repos - Math.max(c.revision, cibleRev) - Math.max(c.projets, cibleProj);
+    var addMax = num(workday ? params.additionnel_max_min : params.additionnel_libre_max_min);
+    if (addMax === null) addMax = workday ? 180 : 120;
+    var add = Math.max(0, Math.min(reste, addMax));
+    var allege = opts.humeurVeille != null && +opts.humeurVeille <= 2;
+    if (allege) add = add / 2;
+    add = Math.floor(add / 15) * 15;
+    var travail = c.travail_oblig + c.travail_add;
+    var occupe = travail + coursMin + repas + route + c.revision + c.projets + c.sport + c.social + c.perso + c.interstices;
+    return {
+      jour: day, workday: workday, cours: cours, weekend: w > 5,
+      sommeil: sl.duree, lever: sl.lever, coucher: sl.coucher, eveil: eveil,
+      obligatoire: oblig, obligSpans: obl, coursMin: coursMin, coursSpans: coursSpans,
+      conseilAdd: add, conseille: oblig + add, allege: allege,
+      travail: travail, travailOblig: c.travail_oblig, travailAdd: c.travail_add,
+      revision: c.revision, cibleRevision: cibleRev, projets: c.projets, cibleProjets: cibleProj,
+      sport: c.sport, social: c.social, perso: c.perso, interstices: c.interstices,
+      repas: repas, route: route, libre: Math.max(0, eveil - occupe),
+      depasse: travail > oblig + add, horsSommeil: horsSommeil
+    };
   }
 
   /* Priorité de planification, d'après les Règles du brief */
@@ -300,7 +383,7 @@
       busy.push([s.getHours() * 60 + s.getMinutes(), f.getHours() * 60 + f.getMinutes()]);
     });
     tasks.forEach(function (t) {
-      if (t.jour === day && t.debut) busy.push([toMin(t.debut), toMin(t.debut) + (num(t.duree_min) || 30)]);
+      if (t.jour === day && t.debut && !isInterstice(t) && t.statut !== 'Supprimée') busy.push([toMin(t.debut), toMin(t.debut) + (num(t.duree_min) || 30)]);
     });
     busy.sort(function (a, b) { return a[0] - b[0]; });
     var free = [], cur = start;
@@ -325,20 +408,21 @@
 
   /* Proposition de plan pour une journée */
   /* opts.exclude : tâches refusées pour ce jour ; opts.from : minute à partir de laquelle proposer ;
-     opts.extraUsed : minutes déjà réalisées ce jour, déduites de la capacité */
+     opts.extraUsed : minutes déjà réalisées ce jour ; opts.cap : travail conseillé du jour (dayBudget) */
   function proposePlan(day, tasks, events, regles, params, today, opts) {
     opts = opts || {};
     var exclude = opts.exclude || [];
     var cours = isCoursDay(day, events, params);
-    var cap = capacityFor(day, cours, regles, params);
+    var cap = num(opts.cap) !== null ? num(opts.cap) : capacityFor(day, cours, regles, params);
     var used = num(opts.extraUsed) || 0;
-    tasks.forEach(function (t) { if (t.jour === day && t.debut && t.statut !== 'Fait') used += correctedDuration(t, regles, params); });
+    tasks.forEach(function (t) { if (t.jour === day && t.debut && t.statut !== 'Fait' && isWork(t)) used += correctedDuration(t, regles, params); });
+    var telMin = toMin(params.tel_debut || '17:00');
     var free = freeSlots(day, events, tasks, params, opts.from);
     var fondRule = acceptedRule(regles, 'creneau:Fond');
     var avoid = regles.filter(function (r) { return r.statut === 'acceptee' && r.cle.indexOf('eviter:') === 0; })
                       .map(function (r) { return r.cle.slice(7); });
     var cands = tasks.filter(function (t) {
-      return (t.statut === 'À faire' || t.statut === 'En cours') && !(t.jour && t.debut) && exclude.indexOf(t.id) === -1;
+      return isWork(t) && (t.statut === 'À faire' || t.statut === 'En cours') && !(t.jour && t.debut) && exclude.indexOf(t.id) === -1;
     }).sort(function (a, b) { return rank(a, today, params) - rank(b, today, params); });
     var plan = [];
     var groupables = [], others = [];
@@ -355,18 +439,23 @@
           return ba - bb || free[a][0] - free[b][0];
         });
       }
+      // Prospection téléphonique : jamais avant l'heure fixée (17 h par défaut)
+      var minStart = t.type === 'Prospection tél' && telMin !== null ? telMin : null;
       for (var k = 0; k < order.length; k++) {
-        var f = free[order[k]];
-        if (f[1] - f[0] < d) continue;
-        if (avoid.indexOf(t.type + ':' + bucketOf(fromMin(f[0]))) !== -1) continue;
-        plan.push({ tache_id: t.id, debut: fromMin(f[0]), duree_min: d, raison: raison });
-        f[0] += d; used += dc;
+        var f = free[order[k]], s0 = minStart !== null ? Math.max(f[0], minStart) : f[0];
+        if (f[1] - s0 < d) continue;
+        if (avoid.indexOf(t.type + ':' + bucketOf(fromMin(s0))) !== -1) continue;
+        plan.push({ tache_id: t.id, debut: fromMin(s0), duree_min: d, raison: raison });
+        if (s0 > f[0]) { free.push([s0 + d, f[1]]); f[1] = s0; } else f[0] += d;
+        used += dc;
         return true;
       }
       return false;
     }
     others.forEach(function (t) {
       var raison = t.echeance && t.echeance < today ? 'En retard' : (t.echeance && t.echeance <= addDays(today, 1) ? 'Échéance proche' : (+t.prio === 1 ? 'Priorité rouge' : 'À avancer'));
+      if (t.type === 'Prospection mail') raison += ', envoi programmé à ' + (params.envoi_mail || '08:00');
+      if (t.type === 'Prospection tél') raison += ', appels après ' + (params.tel_debut || '17:00');
       var pref = t.type === 'Fond' ? (fondRule ? fondRule.valeur : '8-10') : null;
       if (t.type === 'Fond' && !fondRule && free.length) pref = bucketOf(fromMin(free[0][0]));
       place(t, pref, raison);
@@ -394,12 +483,45 @@
     return { plan: plan, capacite: cap, cours: cours, charge: used };
   }
 
+  /* Recaler une journée quand une tâche commence en retard : les tâches suivantes glissent
+     juste après, en contournant les créneaux occupés (agenda, midi, temps perso). Rend la liste des déplacements. */
+  function cascade(day, startedId, startMin, tasks, events, params) {
+    var busy = [];
+    var md = toMin(params.midi_debut), mf = toMin(params.midi_fin);
+    if (md !== null && mf !== null && weekday(day) <= 5) busy.push([md, mf]);
+    events.forEach(function (e) { var sp = evSpan(e, day); if (sp) busy.push(sp); });
+    tasks.forEach(function (t) { if (t.jour === day && t.debut && isPerso(t) && t.statut !== 'Supprimée') busy.push([toMin(t.debut), toMin(t.debut) + (num(t.duree_min) || 30)]); });
+    function fit(a, d) {
+      var moved = true;
+      while (moved) {
+        moved = false;
+        for (var i = 0; i < busy.length; i++) if (a < busy[i][1] && busy[i][0] < a + d) { a = busy[i][1]; moved = true; }
+      }
+      return a;
+    }
+    var started = null;
+    tasks.forEach(function (t) { if (t.id === startedId) started = t; });
+    var cur = startMin + (num(started && started.duree_min) || 30), moves = [];
+    tasks.filter(function (t) {
+      return t.id !== startedId && t.jour === day && t.debut && isWork(t) && t.statut !== 'Fait' && t.statut !== 'Supprimée' && toMin(t.debut) >= (toMin(started && started.debut) || 0);
+    }).sort(function (a, b) { return toMin(a.debut) - toMin(b.debut); }).forEach(function (t) {
+      var a = toMin(t.debut), d = num(t.duree_min) || 30;
+      if (a >= cur) { cur = Math.max(cur, a + d); return; }
+      var n = fit(Math.ceil(cur / 5) * 5, d);
+      moves.push({ id: t.id, de: t.debut, vers: fromMin(n) });
+      cur = n + d;
+    });
+    return moves;
+  }
+
   var api = {
     ENTITES: ENTITES, TYPES: TYPES, STATUTS: STATUTS, PRIOS: PRIOS, PRIO_LABELS: PRIO_LABELS, SEUILS: SEUILS,
     pad: pad, ymd: ymd, parseYmd: parseYmd, addDays: addDays, toMin: toMin, fromMin: fromMin, weekday: weekday,
     mondayOf: mondayOf, diffDays: diffDays, longDate: longDate, shortDate: shortDate, fmtDur: fmtDur, JOURS: JOURS,
     parseQuick: parseQuick, stats: stats, suggestions: suggestions, correctedDuration: correctedDuration,
-    capacityFor: capacityFor, freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank,
+    capacityFor: capacityFor, dayBudget: dayBudget, ranges: ranges, sleepSpan: sleepSpan, category: category, cascade: cascade,
+    PERSO: PERSO, INTERSTICE: INTERSTICE, INTERSTICES: INTERSTICES, isPerso: isPerso, isInterstice: isInterstice, isWork: isWork, rootId: rootId,
+    freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank,
     bucketOf: bucketOf, acceptedRule: acceptedRule, num: num, norm: norm
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
