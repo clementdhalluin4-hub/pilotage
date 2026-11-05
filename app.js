@@ -50,8 +50,10 @@
     cross: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.6L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.6L20 16M20 20v-4h-4"/></svg>',
     plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
-    chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>'
+    chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>',
+    bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.6 1.8H4.4zM10 20.5a2.2 2.2 0 0 0 4 0"/></svg>'
   };
+  function clocheOn(t) { return !!t && (t.cloche === true || String(t.cloche) === '1'); }
 
   function P() { var o = {}; Object.keys(DEFAULT_PARAMS).forEach(function (k) { o[k] = DEFAULT_PARAMS[k]; }); Object.keys(S.parametres || {}).forEach(function (k) { if (S.parametres[k] !== '') o[k] = S.parametres[k]; }); return o; }
   function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); }
@@ -154,7 +156,9 @@
         push('tache', task);
       }
     });
+    triSiri();
     render();
+    if (ui.target) openTarget();
   }
 
   /* Journal et modifications */
@@ -265,6 +269,7 @@
     var ent = ENT_KEY[t.entite] || 'p', prio = +t.prio || 3, d = today();
     var meta = [];
     if (opts.time && t.debut) meta.push('<span class="m-time">' + esc(t.debut) + '</span>');
+    if (clocheOn(t) && t.statut !== 'Fait') meta.push('<span class="m-bell" title="Cloche activée">' + ICON.bell + '</span>');
     meta.push('<span>' + esc(t.type || '') + '</span>');
     if (t.echeance) meta.push('<span class="' + (t.echeance < d && t.statut !== 'Fait' ? 'm-late' : '') + '">' + (t.echeance < d ? 'en retard, ' : 'pour ') + esc(C.shortDate(t.echeance)) + '</span>');
     var rc = reportCount(t.id); if (rc && !opts.compact) meta.push('<span class="m-late">reportée ' + rc + ' fois</span>');
@@ -278,7 +283,7 @@
       '<button class="band-p" data-act="prio" aria-label="Priorité ' + PRIO_NAME[prio] + ', changer"></button>' +
       '<div class="strip-body" data-act="edit">' +
         (opts.range && t.debut && !opts.compact ? '<div class="strip-range">' + esc(t.debut) + '–' + C.fromMin(C.toMin(t.debut) + (C.num(t.duree_min) || 30)) + '</div>' : '') +
-        '<div class="strip-title">' + (opts.range && t.debut && opts.compact ? '<span class="st-range">' + esc(t.debut) + '–' + C.fromMin(C.toMin(t.debut) + (C.num(t.duree_min) || 30)) + '</span>' : '') + esc(t.titre) + '</div>' +
+        '<div class="strip-title">' + (opts.range && t.debut && opts.compact ? '<span class="st-range">' + esc(t.debut) + '–' + C.fromMin(C.toMin(t.debut) + (C.num(t.duree_min) || 30)) + '</span>' : '') + (opts.compact && clocheOn(t) && t.statut !== 'Fait' ? '<span class="st-bell">' + ICON.bell + '</span>' : '') + esc(t.titre) + '</div>' +
         (opts.compact ? '' : '<div class="strip-meta">' + meta.join('') + '</div>') +
       '</div>' +
       '<div class="strip-dur">' + esc(C.fmtDur(C.num(t.duree_min) || 30)) + '</div>' +
@@ -1257,7 +1262,10 @@
     var isNew = !t;
     t = t || Object.assign({ titre: '', prio: 2, entite: 'ETS MAURAGE', type: 'Fond', duree_min: 30, statut: 'À faire', echeance: '', jour: '', debut: '', contexte: '' }, preset || {});
     var chain = isNew ? [] : chainOf(t);
-    var h = '<h2>' + (isNew ? (C.isPerso(t) ? 'Nouveau temps perso' : 'Nouvelle tâche') : 'Modifier ' + (C.isPerso(t) ? 'le temps perso' : 'la tâche')) + '</h2><form data-form="edit" data-id="' + esc(t.id || '') + '">' +
+    var on = clocheOn(t);
+    var h = '<form data-form="edit" data-id="' + esc(t.id || '') + '"><div class="sheet-head"><h2>' + (isNew ? (C.isPerso(t) ? 'Nouveau temps perso' : 'Nouvelle tâche') : 'Modifier ' + (C.isPerso(t) ? 'le temps perso' : 'la tâche')) + '</h2>' +
+      '<label class="bell-toggle" title="Me prévenir à l\'heure de la tâche"><input type="checkbox" name="cloche" value="1"' + (on ? ' checked' : '') + '>' + ICON.bell + '<span class="sr">Me prévenir à l\'heure de la tâche</span></label></div>' +
+      '<p class="bell-hint muted small"' + (on ? '' : ' hidden') + '>Notification à l\'heure de début' + (t.debut ? ' (' + esc(t.debut) + ')' : ', dès que la tâche a une heure') + '.</p>' +
       '<label class="field"><span>Titre</span><input name="titre" required value="' + esc(t.titre) + '" placeholder="' + (C.isPerso(t) ? 'Piscine, repas chez Nana…' : '') + '"></label>' +
       '<div class="field"><span>Priorité</span><div class="chips">' + [1, 2, 3, 4].map(function (n) { return '<label class="chip"><input type="radio" name="prio" value="' + n + '"' + (+t.prio === n ? ' checked' : '') + '><i style="--e:var(--p' + n + ')"></i>' + PRIO_NAME[n] + '</label>'; }).join('') + '</div></div>' +
       '<div class="field"><span>Entité</span><div class="chips">' + C.ENTITES.map(function (e) { return '<label class="chip"><input type="radio" name="entite" value="' + esc(e) + '"' + (t.entite === e ? ' checked' : '') + '><i style="--e:var(--e-' + ENT_KEY[e] + ')"></i>' + esc(ENT_SHORT[e]) + '</label>'; }).join('') + '</div></div>' +
@@ -1277,13 +1285,169 @@
     openSheet(h);
   }
 
+  /* Ajout rapide : « Relance devis Dupont demain 10h 15 min 1001F rouge » */
+  function quickFields(q) {
+    var p = C.parseQuick(q, today());
+    var fields = { titre: p.titre || q };
+    ['jour', 'debut', 'entite', 'type'].forEach(function (k) { if (p[k]) fields[k] = p[k]; });
+    if (p.duree_min) fields.duree_min = p.duree_min; if (p.prio) fields.prio = p.prio;
+    if (fields.debut && !fields.jour) fields.jour = today();
+    if (!fields.type) fields.type = (fields.entite === 'Sport' || fields.entite === 'Social') ? C.PERSO : (/relanc|rappel|appel/i.test(q) ? 'Relance' : 'Fond');
+    if (!fields.duree_min) fields.duree_min = fields.type === 'Relance' ? 10 : (fields.type === C.PERSO ? 60 : 30);
+    if (fields.type === C.PERSO && !p.prio) fields.prio = 3;
+    return fields;
+  }
+  /* Dictées Siri : la passerelle les enregistre brutes, TRINITY les découpe comme l'ajout rapide */
+  function triSiri() {
+    var n = 0;
+    S.taches.forEach(function (t) {
+      if (t.origine !== 'Siri à trier') return;
+      var raw = String(t.titre || '').trim();
+      var f = quickFields(raw.charAt(0).toLowerCase() + raw.slice(1));
+      if (f.titre) f.titre = f.titre.charAt(0).toUpperCase() + f.titre.slice(1);
+      f.origine = 'Siri'; f.contexte = t.contexte || ('Dicté : « ' + raw + ' »');
+      saveTask(t, f, { silent: true }); log(t, 'cree', { detail: 'dictée Siri' }); if (t.jour && t.debut) log(t, 'place', { detail: 'dictée Siri' });
+      n++;
+    });
+    if (n) toast(n > 1 ? n + ' tâches dictées ajoutées' : 'Tâche dictée ajoutée : ' + S.taches.filter(function (t) { return t.origine === 'Siri'; }).slice(-1)[0].titre);
+  }
+
+  /* Notifications : abonnement de l'appareil, ouverture depuis une notification, pastille sur l'icône */
+  function isStandalone() { return window.navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+  function isIOS() { return /iPhone|iPad|iPod/.test(navigator.userAgent); }
+  function notifSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+  function notifState() {
+    var st = LS.get('pp.notif', null);
+    return { on: !!(st && st.endpoint && notifSupported() && Notification.permission === 'granted'), st: st };
+  }
+  function b64uBytes(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '=';
+    var bin = atob(s), out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out;
+  }
+  /* Le service worker lit l'adresse de la passerelle ici pour aller chercher le texte des notifications */
+  function syncCfgToSw() {
+    if (!('caches' in window)) return;
+    caches.open('trinity-cfg').then(function (c) { return c.put('cfg', new Response(JSON.stringify(cfg ? { url: cfg.url, key: cfg.key } : {}))); }).catch(function () {});
+  }
+  function enableNotifs() {
+    if (!cfg) { toast('Relie d\'abord la base dans les réglages'); return; }
+    if (!notifSupported()) {
+      toast(isIOS() && !isStandalone() ? 'Ouvre TRINITY depuis l\'icône de l\'écran d\'accueil pour activer les notifications' : 'Les notifications ne sont pas disponibles sur cet appareil');
+      return;
+    }
+    var vapid = '';
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') throw new Error('refus');
+      return fetch(cfg.url + '?key=' + encodeURIComponent(cfg.key) + '&action=vapid').then(function (r) { return r.json(); });
+    }).then(function (res) {
+      if (!res.ok || !res.cle_publique) throw new Error('vapid');
+      vapid = res.cle_publique;
+      return navigator.serviceWorker.ready;
+    }).then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (old) {
+        var st = LS.get('pp.notif', null);
+        if (old && st && st.k === vapid) return old;
+        return (old ? old.unsubscribe() : Promise.resolve()).then(function () {
+          return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(vapid) });
+        });
+      });
+    }).then(function (sub) {
+      var ep = sub.endpoint;
+      LS.set('pp.notif', { endpoint: ep, k: vapid, le: nowIso() });
+      push('abonnement', { endpoint: ep, appareil: (isIOS() ? 'iPhone' : (navigator.platform || 'Ordinateur')) });
+      syncCfgToSw();
+      toast('Notifications activées');
+      if ($('#sheet').open) openSettings();
+    }).catch(function (err) {
+      var m = String(err && err.message || err);
+      toast(m === 'refus' ? 'Notifications refusées : autorise-les dans Réglages > Notifications > TRINITY'
+        : m === 'vapid' ? 'La passerelle n\'est pas encore prête : lance installerNotifications() dans Apps Script'
+        : 'Activation impossible : ' + m);
+    });
+  }
+  function disableNotifs() {
+    var st = LS.get('pp.notif', null);
+    if (st && st.endpoint) push('desabonnement', { endpoint: st.endpoint });
+    LS.set('pp.notif', null);
+    if (notifSupported()) navigator.serviceWorker.ready.then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (s) { if (s) s.unsubscribe(); }).catch(function () {});
+    toast('Notifications coupées sur cet appareil');
+    if ($('#sheet').open) openSettings();
+  }
+  function testNotif() {
+    if (!cfg) return;
+    toast('Envoi du test…');
+    fetch(cfg.url, { method: 'POST', body: JSON.stringify({ key: cfg.key, ops: [{ type: 'test_notif', data: {} }] }), headers: { 'Content-Type': 'text/plain;charset=utf-8' } })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        var r = res.resultat || {}, codes = r.codes || [];
+        if (!res.ok) toast('La passerelle a refusé le test');
+        else if (!r.appareils) toast('Aucun appareil abonné : active d\'abord les notifications');
+        else if (codes.every(function (c) { return c >= 200 && c < 300; })) toast('Test envoyé, la notification arrive dans quelques secondes');
+        else toast('Envoi refusé (code ' + codes.join(', ') + ')');
+      })
+      .catch(function () { toast('Passerelle injoignable'); });
+  }
+  function notifSettingsHtml() {
+    var ns = notifState();
+    var h = '<div class="rythme"><h3>Notifications</h3>';
+    if (!notifSupported() && isIOS() && !isStandalone()) h += '<p class="muted">Ouvre TRINITY depuis son icône sur l\'écran d\'accueil pour activer les notifications.</p>';
+    else if (!notifSupported()) h += '<p class="muted">Ce navigateur ne reçoit pas les notifications.</p>';
+    else if (ns.on) h += '<p class="muted">Activées sur cet appareil. Active la cloche dans une tâche pour être prévenu à son heure de début.</p><div class="row-actions"><button class="btn primary sm" type="button" data-act="notif-test">Envoyer un test</button><button class="btn sm" type="button" data-act="notif-off">Couper sur cet appareil</button></div>';
+    else h += '<p class="muted">Reçois tes rappels (cloche des tâches) et les questions de TRINITY sur cet appareil.</p><div class="row-actions"><button class="btn primary sm" type="button" data-act="notif-on">' + ICON.bell + ' Activer les notifications</button></div>';
+    return h + '</div>';
+  }
+  /* Ouverture depuis une notification : « tache:ID », « regle:ID » ou « aujourdhui » */
+  function consumeTarget(cible) {
+    if (!cible) return;
+    ui.target = cible;
+    if (S.taches.length || !cfg) openTarget();
+  }
+  function openTarget() {
+    var cible = ui.target; if (!cible) return;
+    var m = String(cible).match(/^(tache|regle):(.+)$/);
+    if (!m) { ui.target = null; if (ui.view !== 'aujourdhui') location.hash = '#aujourdhui'; return; }
+    if (m[1] === 'tache') {
+      var t = getTask(m[2]); if (!t) return; // la base n'est pas encore chargée : nouvel essai après le chargement
+      ui.target = null;
+      var fin = t.debut ? C.fromMin(C.toMin(t.debut) + (C.num(t.duree_min) || 30)) : '';
+      var started = timer && timer.id === t.id;
+      openSheet('<div class="notif-card" style="--e:var(--e-' + (ENT_KEY[t.entite] || 'p') + ')"><p class="kicker">' + ICON.bell + ' C\'est l\'heure</p><h2>' + esc(t.titre) + '</h2>' +
+        '<p class="notif-meta">' + (t.debut ? '<span class="m-time">' + esc(t.debut) + ' → ' + esc(fin) + '</span>' : '') + '<span class="notif-ent">' + esc(ENT_SHORT[t.entite] || t.entite) + '</span><span>' + esc(C.fmtDur(C.num(t.duree_min) || 30)) + '</span></p>' +
+        (t.contexte ? '<p class="muted">' + esc(t.contexte) + '</p>' : '') +
+        '<div class="row-actions">' + (t.statut === 'Fait' ? '<p class="muted">Cette tâche est déjà faite.</p>' : started ? '<p class="muted">Le chrono tourne déjà.</p>' : '<button class="btn primary" data-act="start-now" data-id="' + esc(t.id) + '">Lancer le chrono</button>') +
+        '<button class="btn" data-act="edit" data-id="' + esc(t.id) + '">Modifier</button><button class="btn" data-act="close">Plus tard</button></div></div>', { noFocus: true });
+    } else {
+      var r = S.regles.filter(function (x) { return String(x.id) === m[2]; })[0]; if (!r) return;
+      ui.target = null;
+      if (r.statut !== 'proposee') { toast('Question déjà traitée'); return; }
+      openSheet('<p class="kicker">Une question rapide</p><h2>' + esc(r.texte) + '</h2>' + (r.preuve ? '<p class="proof">' + esc(r.preuve) + '</p>' : '') +
+        '<div class="row-actions"><button class="btn primary" data-act="rule-c" data-ok="1" data-rid="' + esc(r.id) + '">Oui, appliquer</button><button class="btn" data-act="rule-c" data-ok="0" data-rid="' + esc(r.id) + '">Non</button></div>', { noFocus: true });
+    }
+  }
+  function checkClicked() {
+    var q = new URLSearchParams(location.search).get('n');
+    if (q) { history.replaceState(null, '', location.pathname + location.hash); consumeTarget(q); return; }
+    if (!('caches' in window)) return;
+    caches.open('trinity-cfg').then(function (c) {
+      return c.match('clic').then(function (r) { return r ? r.json().then(function (j) { c.delete('clic'); if (Date.now() - j.t < 10 * 60000) consumeTarget(j.cible); }) : null; });
+    }).catch(function () {});
+  }
+  /* À chaque ouverture : notifications marquées comme vues et pastille effacée */
+  function markSeen() {
+    if (navigator.clearAppBadge) navigator.clearAppBadge().catch(function () {});
+    if (!cfg || !notifState().on) return;
+    fetch(cfg.url + '?key=' + encodeURIComponent(cfg.key) + '&action=notifs').then(function (r) { return r.json(); }).then(function (res) {
+      (res.notifs || []).forEach(function (n) { push('notif_vue', { id: n.id, vue_le: nowIso() }); });
+    }).catch(function () {});
+  }
+
   /* Feuille modale, menu et notifications */
   function openSheet(html, o) {
     var s = $('#sheet');
     s.querySelector('.sheet-body').innerHTML = html;
     if (!s.open) s.showModal();
     // Sur téléphone, ne pas ouvrir le clavier d'office quand on choisit dans une liste
-    var first = (o && o.noFocus && matchMedia('(pointer: coarse)').matches) ? s.querySelector('.sheet-body') : s.querySelector('input:not([type=radio]), select, textarea, button');
+    var first = (o && o.noFocus && matchMedia('(pointer: coarse)').matches) ? s.querySelector('.sheet-body') : s.querySelector('input:not([type=radio]):not([type=checkbox]), select, textarea, button');
     if (first) { if (first.classList.contains('sheet-body')) first.setAttribute('tabindex', '-1'); first.focus(); }
   }
   function closeSheet() { var s = $('#sheet'); if (s.open) s.close(); }
@@ -1358,6 +1522,7 @@
           '<div class="field-row"><label class="field"><span>Travail en plus, au plus (min)</span><input name="additionnel_max_min" type="number" inputmode="numeric" min="0" step="15" value="' + esc(p.additionnel_max_min) + '"></label><label class="field"><span>Repos minimum (min)</span><input name="repos_min" type="number" inputmode="numeric" min="0" step="15" value="' + esc(p.repos_min) + '"></label></div>' +
           '<div class="row-actions"><button class="btn primary sm" type="submit">Enregistrer mon rythme</button></div></form>';
       })() +
+      (cfg ? notifSettingsHtml() : '') +
       (S.base_id ? '<p class="muted"><a href="https://docs.google.com/spreadsheets/d/' + esc(S.base_id) + '" target="_blank" rel="noopener">Ouvrir la base Google Sheets</a></p>' : '') +
       '<p class="muted">Sur téléphone, ajoute le site à l\'écran d\'accueil depuis le menu de partage du navigateur : il s\'ouvrira en plein écran.</p>' +
       '<p class="muted">Dernière synchronisation : ' + esc(S.synchro || 'jamais') + '. Envois en attente : ' + queue.length + '.</p>');
@@ -1589,7 +1754,7 @@
       case 'tri-set': var ts = planById(a.dataset.pid), tsv = a.dataset.precise ? readTime($('#pop'), 'pp') : a.dataset.v; if (ts && getTask(ts.tache_id)) { closePop(); guardPlace(getTask(ts.tache_id), ts.jour, tsv, { dur: C.num(ts.duree_min) || undefined, onOk: function (deb) { ts.debut = deb; decide(ts.id, true); } }); } break;
       case 'g-time': case 'g-cancel': case 'g-force': case 'g-inter': case 'g-cut': guardAct(act, a); break;
       case 'why-skip': clearWhy(); closeSheet(); break;
-      case 'start-now': if (t) startNow(t); break;
+      case 'start-now': if (t) { closeSheet(); startNow(t); } break;
       case 'suite': if (t) { closeSheet(); openSuite(t, timer && timer.id === t.id ? (Date.now() - timer.start) / 60000 : null); } break;
       case 'dur-suite': if (t) { var dsv = C.num($('#dur-custom').value); closeSheet(); openSuite(t, dsv); } break;
       case 'inter-go': if (inter && inter.label === a.dataset.v) interStop(); else interStart(a.dataset.v); break;
@@ -1629,13 +1794,16 @@
       case 'dur-pick': $all('[data-act="dur-pick"]').forEach(function (b) { b.setAttribute('aria-pressed', b === a); }); $('#dur-custom').value = a.dataset.v; break;
       case 'dur-ok': if (t) { var v = C.num($('#dur-custom').value); if (v) { closeSheet(); finishTask(t, v); } } break;
       case 'close': closeSheet(); break;
+      case 'notif-on': enableNotifs(); break;
+      case 'notif-off': disableNotifs(); break;
+      case 'notif-test': testNotif(); break;
       // Pas de confirm() : peu fiable dans l'app installée sur iPhone. Suppression immédiate, annulable.
       case 'delete': if (t) { removeTask(t, true); } break;
       case 'unplace': if (t) { removeTask(t, false); } break;
       case 'rule-yes': decideRule(S._sugg[+a.dataset.i], true); break;
       case 'rule-no': decideRule(S._sugg[+a.dataset.i], false); break;
       case 'rules': showRules(); break;
-      case 'rule-c': var rc = S.regles.filter(function (r) { return r.id === a.dataset.rid; })[0]; if (rc) { rc.statut = a.dataset.ok === '1' ? 'acceptee' : 'refusee'; rc.decide_le = nowIso(); push('regle', rc); toast(a.dataset.ok === '1' ? 'Règle appliquée' : 'Proposition ignorée'); render(); } break;
+      case 'rule-c': var rc = S.regles.filter(function (r) { return r.id === a.dataset.rid; })[0]; if (rc) { rc.statut = a.dataset.ok === '1' ? 'acceptee' : 'refusee'; rc.decide_le = nowIso(); push('regle', rc); closeSheet(); toast(a.dataset.ok === '1' ? 'Règle appliquée' : 'Proposition ignorée'); render(); } break;
       case 'rule-off': var rr = S.regles.filter(function (r) { return r.id === a.dataset.rid; })[0]; if (rr) { rr.statut = 'refusee'; rr.decide_le = nowIso(); push('regle', rr); showRules(); } break;
       case 'ask': askClaude(); break;
       case 'ask-go': askGo(); break;
@@ -1683,15 +1851,7 @@
     var f = e.target; e.preventDefault();
     if (f.dataset.form === 'quick') {
       var q = $('#quick').value.trim(); if (!q) { openEditor(null); return; }
-      var p = C.parseQuick(q, today());
-      var fields = { titre: p.titre || q };
-      ['jour', 'debut', 'entite', 'type'].forEach(function (k) { if (p[k]) fields[k] = p[k]; });
-      if (p.duree_min) fields.duree_min = p.duree_min; if (p.prio) fields.prio = p.prio;
-      if (fields.debut && !fields.jour) fields.jour = today();
-      if (!fields.type) fields.type = (fields.entite === 'Sport' || fields.entite === 'Social') ? C.PERSO : (/relanc|rappel|appel/i.test(q) ? 'Relance' : 'Fond');
-      if (!fields.duree_min) fields.duree_min = fields.type === 'Relance' ? 10 : (fields.type === C.PERSO ? 60 : 30);
-      if (fields.type === C.PERSO && !p.prio) fields.prio = 3;
-      var t = createTask(fields);
+      var t = createTask(quickFields(q));
       $('#quick').value = ''; $('#quick-preview').innerHTML = '';
       toast('Ajoutée : ' + t.titre); render(); setTimeout(function () { var i = $('#quick'); if (i) i.focus(); }, 0);
     } else if (f.dataset.form === 'edit') {
@@ -1699,6 +1859,8 @@
       ['titre', 'type', 'echeance', 'statut', 'jour', 'contexte', 'entite'].forEach(function (k) { ch[k] = (fd.get(k) || '').toString(); });
       ch.debut = readTime(f, 'debut');
       ch.prio = +fd.get('prio') || 2; ch.duree_min = C.num(fd.get('duree_min')) || 30;
+      ch.cloche = fd.get('cloche') ? '1' : '';
+      if (ch.cloche && !notifState().on) setTimeout(function () { toast('Cloche activée. Active les notifications dans les réglages pour la recevoir'); }, 400);
       if (ch.debut && !ch.jour) ch.jour = today();
       var id = f.dataset.id, task = id ? getTask(id) : null;
       // Placement voulu : vérifié par le garde-fou avant d'être appliqué
@@ -1737,10 +1899,13 @@
     } else if (f.dataset.form === 'cfg') {
       var url = f.url.value.trim(), key = f.key.value.trim();
       if (!/^https:\/\/script\.google\.com\//.test(url)) { toast('L\'adresse doit commencer par https://script.google.com/'); return; }
-      cfg = { url: url, key: key }; LS.set('pp.cfg', cfg);
+      cfg = { url: url, key: key }; LS.set('pp.cfg', cfg); syncCfgToSw();
       S = LS.get('pp.cache', null) || emptyState(); queue = [];
       closeSheet(); load().then(function () { if (ui.syncState === 'ok') toast('Base reliée : ' + S.taches.length + ' tâches'); });
     }
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target.name === 'cloche') { var hint = $('.bell-hint'); if (hint) hint.hidden = !e.target.checked; }
   });
   document.addEventListener('input', function (e) {
     if (e.target.id === 'quick') {
@@ -1785,7 +1950,7 @@
   }
   window.addEventListener('hashchange', route);
   document.addEventListener('click', function (e) { var f = e.target.closest('[data-filter="retard"]'); if (f) { ui.filtre.statut = 'retard'; } }, true);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) { checkDay(); load(); } });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { checkDay(); load(); checkClicked(); markSeen(); } });
   window.addEventListener('pageshow', function () { if (checkDay()) load(); });
   setInterval(function () {
     if (document.hidden) return;
@@ -1796,8 +1961,14 @@
   }, 30000);
   setInterval(function () { if (!document.hidden && cfg && !drag && !resize && !$('#sheet').open) load(); }, 120000);
 
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { /* hors ligne indisponible */ });
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* hors ligne indisponible */ });
+    navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.type === 'notif') { if ('caches' in window) caches.open('trinity-cfg').then(function (c) { c.delete('clic'); }); closeSheet(); consumeTarget(e.data.cible); } });
+  }
+  syncCfgToSw();
   route();
+  checkClicked();
   load();
+  markSeen();
   window.__pp = { S: function () { return S; }, queue: function () { return queue; } };
 })();

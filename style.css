@@ -731,3 +731,24 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 28px; outline: none
 .tri-act.self { flex: 1.5 1 0; }
 .tri-act.no span { display: none; }
 .tri-act.no { width: 44px; padding: 0; }
+
+/* Cloche et notifications (lot 4) */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.bell-toggle { flex: none; position: relative; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03); color: var(--ink-3); cursor: pointer; transition: color .2s, border-color .2s, box-shadow .2s, background .2s; }
+.bell-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.bell-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+.bell-toggle:has(input:checked) { color: #fff; border-color: transparent; background: linear-gradient(var(--solid), var(--solid)) padding-box, var(--grad) border-box; border: 1px solid transparent; box-shadow: var(--glow); }
+.bell-toggle:has(input:checked) svg { stroke: var(--cyan); fill: rgba(60, 240, 255, .18); }
+.bell-toggle:has(input:focus-visible) { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.bell-hint { margin: -2px 0 10px; color: var(--cyan); }
+.strip-meta .m-bell, .st-bell { display: inline-flex; align-items: center; color: var(--cyan); }
+.strip-meta .m-bell svg, .st-bell svg { width: 13px; height: 13px; fill: rgba(60, 240, 255, .2); stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.st-bell { margin-right: 5px; vertical-align: -2px; }
+.btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; vertical-align: -3px; margin-right: 6px; }
+.notif-card .kicker svg { width: 14px; height: 14px; fill: none; stroke: var(--cyan); stroke-width: 1.8; vertical-align: -2px; margin-right: 4px; }
+.notif-card .kicker::before { display: none; }
+.notif-card h2 { border-left: 3px solid var(--e); padding-left: 10px; }
+.notif-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .88rem; color: var(--ink-2); margin: 4px 0 10px; }
+.notif-meta .m-time { font-family: var(--mono); color: var(--cyan); }
+.notif-ent { color: var(--e); }
