@@ -358,7 +358,7 @@
     var g = ui.guard, t = getTask(g.id), times = otherTimes(t, g.day, g.dur);
     return '<h2>Une règle n\'est pas respectée</h2><p class="muted">« ' + esc(t.titre) + ' » à ' + esc(g.debut) + ' :</p><div class="alerts">' + issues.map(function (x) { return '<p>' + esc(x) + '</p>'; }).join('') + '</div>' +
       '<div class="guard-opt"><h3>Choisir une autre heure</h3>' + (times.length ? '<div class="pop-times">' + times.map(function (m) { return '<button class="pop-time" data-act="g-time" data-v="' + C.fromMin(m) + '">' + C.fromMin(m) + '</button>'; }).join('') + '</div>' : '<p class="muted small">Pas d\'autre créneau libre ce jour-là.</p>') + '</div>' +
-      '<div class="row-actions"><button class="btn primary" data-act="g-force">Placer quand même à ' + esc(g.debut) + '</button><button class="btn" data-act="g-cancel">Annuler</button></div>';
+      '<div class="row-actions"><button class="btn" data-act="g-force">Placer quand même à ' + esc(g.debut) + '</button><button class="btn" data-act="g-cancel">Annuler</button></div>';
   }
   function guardAct(act, a) {
     var g = ui.guard; if (!g) { closeSheet(); return; }
