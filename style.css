@@ -752,3 +752,39 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 28px; outline: none
 .notif-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .88rem; color: var(--ink-2); margin: 4px 0 10px; }
 .notif-meta .m-time { font-family: var(--mono); color: var(--cyan); }
 .notif-ent { color: var(--e); }
+
+/* 12 novembre : flèches de jour à un endroit fixe (titre de largeur constante, repère du jour à part) */
+.daynav { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; align-items: center; gap: 4px; flex-wrap: nowrap; width: min(100%, 470px); }
+.daynav h1 { text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: clamp(1rem, 4.3vw, 1.45rem); }
+.daynav-mark { display: flex; align-items: center; min-height: 32px; }
+.daynav-mark .today-mark, .daynav-mark .rel-mark, .daynav-mark .back-today { margin-left: 0; }
+.daynav-mark .rel-mark + .back-today { margin-left: 8px; }
+@media (max-width: 760px) {
+  .org-bar { gap: 8px 10px; }
+  .daynav { width: 100%; }
+  .daynav-mark { width: 100%; justify-content: center; flex-wrap: nowrap; }
+}
+
+/* 12 novembre : fenêtres utilisables sur téléphone */
+.sheet[open] { display: flex; flex-direction: column; overflow: hidden; }
+.sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-top: 6px; }
+.sheet-bar { flex: 0 0 auto; position: relative; display: flex; justify-content: flex-end; align-items: center; min-height: 48px; padding: 8px 10px 0 22px; touch-action: none; }
+.sheet-grip { display: none; }
+.sheet-x { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .05); color: var(--ink-2); font: 500 .85rem var(--font); cursor: pointer; }
+.sheet-x:hover { color: var(--ink); border-color: rgba(255, 255, 255, .24); }
+.sheet-x svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+html:has(.sheet[open]) { overflow: hidden; }
+@media (max-width: 760px) {
+  .sheet { max-height: 90vh; max-height: 90dvh; }
+  .sheet-body::before { display: none; }
+  .sheet-grip { display: block; position: absolute; left: 50%; top: 8px; width: 40px; height: 5px; margin-left: -20px; border-radius: 3px; background: var(--line); }
+  .sheet-bar { min-height: 52px; padding-top: 14px; }
+}
+
+/* 12 novembre : compteur de la page Listes */
+.list-total { display: flex; align-items: center; gap: 8px; margin: 4px 0 16px; color: var(--ink-3); font-size: .9rem; }
+.list-total b { font: 600 .95rem var(--mono); color: var(--ink); }
+.list-total .sep { width: 4px; height: 4px; border-radius: 50%; background: var(--ink-3); margin: 0 4px; }
+.group h2 .count-min { margin-left: 8px; font: 500 .78rem var(--mono); color: var(--ink-3); }
+.vh { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; opacity: 0; }
+p.sm { font-size: .84rem; }

@@ -6,4 +6,8 @@ Le code ne contient aucune donnée. Les tâches vivent dans un Google Sheets pri
 
 ## Passerelle
 
-Le dossier `passerelle` contient le code Apps Script (Code.gs et Notifications.gs), à coller dans le Google Sheets « Poste de pilotage — base » : Extensions > Apps Script. Aucune clé ni donnée n'y figure : elles restent dans les propriétés du script.
+Le dossier `passerelle` contient le code Apps Script (Code.gs, Notifications.gs et Sauvegarde.gs), à coller dans le Google Sheets « Poste de pilotage — base » : Extensions > Apps Script. Aucune clé ni donnée n'y figure : elles restent dans les propriétés du script.
+
+## Sauvegarde
+
+Sauvegarde.gs copie la base chaque dimanche vers 3 h dans le dossier « TRINITY sauvegardes » de Google Drive et garde les 8 dernières copies. Installation : exécuter installerSauvegarde() une fois et autoriser l'accès à Drive.

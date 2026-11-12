@@ -43,7 +43,7 @@
   var timer = LS.get('pp.timer', null);
   var inter = LS.get('pp.inter', null); // interstice en cours : { label, start, entite }
   var ui = { view: 'aujourdhui', orgDay: today(), dayRef: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: cfg ? 'chargement' : 'demo',
-    auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null };
+    auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null, why: LS.get('pp.why', []) };
 
   var ICON = {
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>',
@@ -56,7 +56,7 @@
   function clocheOn(t) { return !!t && (t.cloche === true || String(t.cloche) === '1'); }
 
   function P() { var o = {}; Object.keys(DEFAULT_PARAMS).forEach(function (k) { o[k] = DEFAULT_PARAMS[k]; }); Object.keys(S.parametres || {}).forEach(function (k) { if (S.parametres[k] !== '') o[k] = S.parametres[k]; }); return o; }
-  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); }
+  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); LS.set('pp.why', ui.why || []); }
   /* Changement de jour : l'app installée sur l'iPhone reste ouverte des jours en arrière-plan,
      la journée affichée suit donc la vraie date dès que l'on revient dessus. */
   function checkDay() {
@@ -182,6 +182,9 @@
     if (placed && (before.jour !== task.jour || before.debut !== task.debut)) {
       var reporte = wasPlaced && before.jour && before.jour < task.jour && before.jour <= today();
       if (wasPlaced && before.jour && before.jour < task.jour && !opts.noWhy && opts.detail !== 'annulation') queueWhy(task, 'decale');
+      // Décalage de plus de 2 h dans la même journée (hors recalages automatiques)
+      else if (wasPlaced && before.jour === task.jour && before.debut && !opts.noWhy && ['annulation', 'recalage après retard', 'suite après coupure'].indexOf(opts.detail) === -1 &&
+        C.toMin(task.debut) - C.toMin(before.debut) > 120) queueWhy(task, 'decale_jour');
       log(task, reporte ? 'reporte' : (wasPlaced ? 'deplace' : 'place'), { detail: opts.detail || '' });
       if (reporte) log(task, 'place', { detail: 'replacée' });
     } else if (!placed && wasPlaced) {
@@ -397,19 +400,27 @@
   function queueWhy(t, kind) {
     if (!C.isWork(t)) return;
     ui.why = ui.why || [];
-    if (!ui.why.some(function (w) { return w.id === t.id; })) ui.why.push({ id: t.id, kind: kind });
+    // Les tâches non faites d'un jour passé sont prêtes tout de suite ; les autres attendent le tri du lendemain matin
+    if (!ui.why.some(function (w) { return w.id === t.id; })) ui.why.push({ id: t.id, kind: kind, jour: kind === 'pasfaite' ? '' : today() });
+    persist();
   }
+  /* Une seule fenêtre par jour, au moment du tri du matin : après l'humeur de la veille, sur Aujourd'hui ou sur l'Organisation du jour */
+  function whyReady() { var d = today(); return (ui.why || []).filter(function (w) { return !w.jour || w.jour < d; }); }
   function maybeAskWhy() {
     if (!ui.why || !ui.why.length || $('#sheet').open || drag) return;
+    if (LS.get('pp.whyDay', '') === today()) return;
+    if (!(ui.view === 'aujourdhui' || (ui.view === 'organisation' && ui.orgMode === 'jour' && ui.orgDay === today()))) return;
+    if (moodYesterdayHtml()) return; // l'humeur de la veille d'abord
     if (ui.undo) { clearTimeout(ui.whyT); ui.whyT = setTimeout(maybeAskWhy, 1200); return; } // laisser le temps d'annuler
-    ui.why = ui.why.filter(function (w) { var t = getTask(w.id); return t && t.statut !== 'Supprimée' && t.statut !== 'Fait' && !(w.kind === 'retire' && t.debut); });
-    var list = ui.why.slice(0, 6);
-    if (!list.length) { ui.why = []; return; }
-    var kinds = { decale: 'décalée', retire: 'retirée du planning', pasfaite: 'pas faite' };
+    ui.why = ui.why.filter(function (w) { var t = getTask(w.id); return t && t.statut !== 'Supprimée' && !(w.kind === 'pasfaite' && t.statut === 'Fait') && !(w.kind === 'retire' && t.debut); });
+    persist();
+    var list = whyReady().slice(-12);
+    if (!list.length) return;
+    var kinds = { decale: 'décalée', decale_jour: 'décalée de plus de 2 h', retire: 'retirée du planning', pasfaite: 'pas faite' };
     var h = '<h2>' + (list.length > 1 ? 'Pourquoi ces tâches ont bougé ?' : 'Pourquoi ?') + '</h2><p class="muted">Ta réponse sert à mieux placer tes journées. Un appui suffit.</p><form data-form="why">';
     list.forEach(function (w, i) {
       var t = getTask(w.id);
-      h += '<div class="why-item"><p class="why-title">« ' + esc(t.titre) + ' » <em>' + kinds[w.kind] + '</em></p><div class="chips">' + RAISONS.map(function (r) { return '<label class="chip"><input type="radio" name="r' + i + '" value="' + esc(r) + '">' + esc(r) + '</label>'; }).join('') + '</div>' +
+      h += '<div class="why-item"><p class="why-title">« ' + esc(t.titre) + ' » <em>' + kinds[w.kind] + (w.jour ? ', ' + esc(C.shortDate(w.jour)) : '') + '</em></p><div class="chips">' + RAISONS.map(function (r) { return '<label class="chip"><input type="radio" name="r' + i + '" value="' + esc(r) + '">' + esc(r) + '</label>'; }).join('') + '</div>' +
         '<input name="txt' + i + '" class="why-txt" placeholder="En quelques mots (facultatif)" autocomplete="off"><input type="hidden" name="id' + i + '" value="' + esc(t.id) + '"><input type="hidden" name="k' + i + '" value="' + w.kind + '"></div>';
     });
     h += '<input type="hidden" name="n" value="' + list.length + '"><div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="why-skip">Passer</button></div></form>';
@@ -424,7 +435,7 @@
     }
     clearWhy(); closeSheet(); if (saved) toast('Merci, c\'est noté');
   }
-  function clearWhy() { var shown = ui.whyShown || []; ui.why = (ui.why || []).filter(function (w) { return shown.indexOf(w.id) === -1; }); ui.whyShown = []; }
+  function clearWhy() { var shown = ui.whyShown || []; ui.why = (ui.why || []).filter(function (w) { return shown.indexOf(w.id) === -1; }); ui.whyShown = []; LS.set('pp.whyDay', today()); persist(); }
   // Tâches de basse priorité déjà décalées plusieurs fois : elles restent dans la réserve au lieu d'être reproposées chaque jour, sauf échéance proche
   function lowPrioSlippers(d) {
     var cnt = {}, notPrio = {};
@@ -885,7 +896,7 @@
     var h = '<section class="org-head"><div class="org-bar"><div class="seg" role="tablist"><button role="tab" aria-selected="' + (ui.orgMode === 'jour') + '" data-act="mode" data-mode="jour">Jour</button><button role="tab" aria-selected="' + (ui.orgMode === 'semaine') + '" data-act="mode" data-mode="semaine">Semaine</button></div>';
     if (ui.orgMode === 'jour') {
       var L = dayLoad(d);
-      h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button>' + todayMark(d) + '</div></div>';
+      h += '<div class="daynav"><button class="icon" data-act="day" data-delta="-1" aria-label="Jour précédent">‹</button><h1>' + esc(cap1(C.longDate(d))) + '</h1><button class="icon" data-act="day" data-delta="1" aria-label="Jour suivant">›</button></div><div class="daynav-mark">' + todayMark(d) + '</div></div>';
       h += statsHtml(L.B) + ribbonHtml(d, L.B, true) + issuesHtml(dayIssues(d, L.B));
       h += '</section>';
       h += '<div class="org"><div class="org-side">' + triageHtml(d) + trayHtml(d) +
@@ -893,7 +904,7 @@
         '<button class="btn wide ghost" data-act="ask">Demander à Claude</button></div>' + gridHtml(d) + '</div>';
     } else {
       var mon = C.mondayOf(d);
-      h += '<div class="daynav"><button class="icon" data-act="week" data-delta="-7" aria-label="Semaine précédente">‹</button><h1>Semaine du ' + esc(C.longDate(mon).replace(/^lundi /, '')) + '</h1><button class="icon" data-act="week" data-delta="7" aria-label="Semaine suivante">›</button>' + (C.mondayOf(today()) !== mon ? '<button class="back-today" data-act="day" data-delta="0">Revenir à cette semaine</button>' : '') + '</div></div></section>';
+      h += '<div class="daynav"><button class="icon" data-act="week" data-delta="-7" aria-label="Semaine précédente">‹</button><h1>Semaine du ' + esc(C.longDate(mon).replace(/^lundi /, '')) + '</h1><button class="icon" data-act="week" data-delta="7" aria-label="Semaine suivante">›</button></div><div class="daynav-mark">' + (C.mondayOf(today()) !== mon ? '<button class="back-today" data-act="day" data-delta="0">Revenir à cette semaine</button>' : '<span class="today-mark">Cette semaine</span>') + '</div></div></section>';
       h += weekHtml(mon);
     }
     return h;
@@ -1047,6 +1058,10 @@
       '<input class="search" id="search" type="search" placeholder="Rechercher" value="' + esc(f.q) + '" aria-label="Rechercher une tâche">' +
       '<div class="seg">' + [['entite', 'Par entité'], ['prio', 'Par priorité']].map(function (g) { return '<button aria-pressed="' + (ui.groupe === g[0]) + '" data-act="groupe" data-v="' + g[0] + '">' + g[1] + '</button>'; }).join('') + '</div></div>';
     h += entChips(f.entite, 'list-ent') + '<div class="chips">' + [1, 2, 3, 4].map(function (n) { return '<button class="chip" aria-pressed="' + (+f.prio === n) + '" data-act="list-prio" data-v="' + n + '" style="--e:var(--p' + n + ')"><i></i>' + PRIO_NAME[n] + '</button>'; }).join('') + '</div></section>';
+    // Compteur : nombre de tâches et temps estimé, recalculés selon les filtres (temps réel pour les tâches faites quand il est connu)
+    function minsOf(t) { return (t.statut === 'Fait' && C.num(t.duree_reelle_min)) || C.num(t.duree_min) || 0; }
+    var totMin = list.reduce(function (m, t) { return m + minsOf(t); }, 0);
+    h += '<p class="list-total" role="status"><b>' + list.length + '</b> tâche' + (list.length > 1 ? 's' : '') + '<span class="sep"></span><b>' + (totMin ? C.fmtDur(totMin) : '0 min') + '</b> ' + (f.statut === 'faites' ? 'passées' : 'estimées') + '</p>';
     var groups = {}, keys;
     if (ui.groupe === 'prio') { keys = ['1', '2', '3', '4']; list.forEach(function (t) { (groups[String(+t.prio || 3)] = groups[String(+t.prio || 3)] || []).push(t); }); }
     else { keys = C.ENTITES.slice(); list.forEach(function (t) { (groups[t.entite] = groups[t.entite] || []).push(t); }); Object.keys(groups).forEach(function (k) { if (keys.indexOf(k) === -1) keys.push(k); }); }
@@ -1055,7 +1070,7 @@
       var g = groups[k]; if (!g || !g.length) return; any = true;
       g.sort(function (a, b) { return (C.num(a.ordre) || 0) - (C.num(b.ordre) || 0); });
       var label = ui.groupe === 'prio' ? C.PRIO_LABELS[k] : k;
-      h += '<section class="group" data-drop="list" data-group="' + esc(k) + '"><h2 style="--e:' + (ui.groupe === 'prio' ? 'var(--p' + k + ')' : 'var(--e-' + (ENT_KEY[k] || 'p') + ')') + '"><i></i>' + esc(label) + ' <span class="count">' + g.length + '</span></h2>' + g.map(function (t) { return strip(t, { check: active(t) }); }).join('') + '</section>';
+      h += '<section class="group" data-drop="list" data-group="' + esc(k) + '"><h2 style="--e:' + (ui.groupe === 'prio' ? 'var(--p' + k + ')' : 'var(--e-' + (ENT_KEY[k] || 'p') + ')') + '"><i></i>' + esc(label) + ' <span class="count">' + g.length + '</span><span class="count-min">' + C.fmtDur(g.reduce(function (m, t) { return m + minsOf(t); }, 0)) + '</span></h2>' + g.map(function (t) { return strip(t, { check: active(t) }); }).join('') + '</section>';
     });
     if (!any) h += '<p class="empty">Aucune tâche ne correspond à ces filtres.</p>';
     return h;
@@ -1451,6 +1466,55 @@
     if (first) { if (first.classList.contains('sheet-body')) first.setAttribute('tabindex', '-1'); first.focus(); }
   }
   function closeSheet() { var s = $('#sheet'); if (s.open) s.close(); }
+  /* Fenêtres sur téléphone : arrière-plan bloqué, défilement interne, fermeture par glissement vers le bas */
+  var sheetLock = null;
+  function lockPage() {
+    if (sheetLock) return;
+    sheetLock = { y: window.scrollY };
+    var b = document.body.style; b.position = 'fixed'; b.top = -sheetLock.y + 'px'; b.left = '0'; b.right = '0'; b.width = '100%';
+  }
+  function unlockPage() {
+    if (!sheetLock) return;
+    var y = sheetLock.y, b = document.body.style; sheetLock = null;
+    b.position = ''; b.top = ''; b.left = ''; b.right = ''; b.width = '';
+    window.scrollTo(0, y);
+  }
+  (function () {
+    var s = $('#sheet'); if (!s) return;
+    new MutationObserver(function () { if (s.open) lockPage(); }).observe(s, { attributes: true, attributeFilter: ['open'] });
+    s.addEventListener('close', function () {
+      if (s.open) return;
+      unlockPage(); s.style.transform = ''; s.style.transition = '';
+      // Fenêtre fermée sans répondre : les questions « Pourquoi ? » restent pour le lendemain, une seule fenêtre par jour
+      if (ui.whyShown && ui.whyShown.length) { ui.whyShown = []; LS.set('pp.whyDay', today()); }
+      if (ui.guard) { ui.guard = null; render(); }
+    });
+    // Glisser vers le bas pour fermer : depuis la barre du haut, ou depuis le contenu quand il est déjà en haut
+    var sw = null;
+    s.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) return;
+      var body = s.querySelector('.sheet-body'), onBar = !!e.target.closest('.sheet-bar');
+      if (e.target.closest('input, textarea, select')) return;
+      if (!onBar && body.scrollTop > 0) return;
+      sw = { y0: e.touches[0].clientY, t0: Date.now(), dy: 0, onBar: onBar };
+    }, { passive: true });
+    s.addEventListener('touchmove', function (e) {
+      if (!sw) return;
+      var dy = e.touches[0].clientY - sw.y0;
+      if (dy <= 0) { if (!sw.onBar) sw = null; s.style.transform = ''; return; }
+      if (!sw.onBar && s.querySelector('.sheet-body').scrollTop > 0) { sw = null; return; }
+      sw.dy = dy; s.style.transition = 'none'; s.style.transform = 'translateY(' + dy + 'px)';
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+    s.addEventListener('touchend', function () {
+      if (!sw) return;
+      var fast = sw.dy > 60 && Date.now() - sw.t0 < 250, far = sw.dy > Math.min(140, s.offsetHeight * .3);
+      s.style.transition = 'transform .2s ease';
+      if (fast || far) { s.style.transform = 'translateY(100%)'; setTimeout(closeSheet, 180); }
+      else s.style.transform = '';
+      sw = null;
+    });
+  })();
   function openPop(anchor, html) {
     var pop = $('#pop'); pop.innerHTML = html; pop.hidden = false;
     var r = anchor.getBoundingClientRect(), w = pop.offsetWidth, hgt = pop.offsetHeight;
@@ -1512,7 +1576,9 @@
 
   function openSettings() {
     openSheet('<h2>Réglages</h2><form data-form="cfg"><label class="field"><span>Adresse de la passerelle (Apps Script)</span><input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(cfg ? cfg.url : '') + '"></label>' +
-      '<label class="field"><span>Clé</span><input name="key" autocomplete="off" value="' + esc(cfg ? cfg.key : '') + '"></label>' +
+      '<input class="vh" name="compte" autocomplete="username" value="TRINITY" tabindex="-1" aria-hidden="true" readonly>' +
+      '<label class="field"><span>Clé</span><input name="key" type="password" autocomplete="current-password" value="' + esc(cfg ? cfg.key : '') + '"></label>' +
+      '<p class="muted sm">La clé est masquée. L\'iPhone propose de l\'enregistrer dans l\'app Mots de passe, sous le nom TRINITY.' + (P().derniere_sauvegarde ? ' Dernière sauvegarde de la base : ' + esc(P().derniere_sauvegarde) + '.' : ' Sauvegarde automatique de la base : pas encore installée.') + '</p>' +
       '<div class="row-actions"><button class="btn primary" type="submit">Relier la base</button>' + (cfg ? '<button class="btn" type="button" data-act="unlink">Délier</button>' : '') + '<button class="btn" type="button" data-act="close">Fermer</button></div></form>' +
       (function () {
         var p = P();
