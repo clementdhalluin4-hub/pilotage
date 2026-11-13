@@ -411,7 +411,7 @@
       '<radialGradient id="av-glow" cx=".5" cy=".42" r=".55"><stop offset="0" stop-color="#9B6BFF" stop-opacity=".38"/><stop offset="1" stop-color="#9B6BFF" stop-opacity="0"/></radialGradient>' +
       '<radialGradient id="av-skin" cx=".38" cy=".32" r=".8"><stop offset="0" stop-color="#F8D6B8"/><stop offset=".7" stop-color="#EDBB93"/><stop offset="1" stop-color="#D99E77"/></radialGradient>' +
       g('av-hair', '#5A4032', '#2A1C15', .4, 1) + g('av-haut-' + t.tenue, tenue.haut, tenue.haut2) + g('av-bas-' + t.tenue, tenue.bas, tenue.bas2, 1, .2) +
-      '</defs><circle cx="100" cy="150" r="140" fill="url(#av-glow)"/><ellipse cx="100" cy="301" rx="52" ry="7" fill="rgba(0,0,0,.35)"/>';
+      '</defs><ellipse cx="100" cy="160" rx="99" ry="155" fill="url(#av-glow)"/><ellipse cx="100" cy="301" rx="52" ry="7" fill="rgba(0,0,0,.35)"/>';
     // Jambes et chaussures
     h += '<rect x="78" y="186" width="20" height="106" rx="8" fill="url(#av-bas-' + t.tenue + ')"/><rect x="102" y="186" width="20" height="106" rx="8" fill="url(#av-bas-' + t.tenue + ')"/>';
     if (t.tenue === 'neglige') h += '<path d="M82 250q6 4 12 0M106 262q6 4 12 0" stroke="rgba(255,255,255,.25)" stroke-width="2" fill="none"/>';
@@ -444,39 +444,57 @@
       if (tenue.manche === 'longue' && t.tenue === 'chemise') h += '<line x1="' + (xS - a[2] * 0) + '" y1="' + (yS - 2) + '" x2="' + xS + '" y2="' + (yS + 2) + '" stroke="#C9D3E2" stroke-width="' + (aw + 3) + '"/>';
       h += '<ellipse cx="' + (x1 + a[2] * 1) + '" cy="194" rx="' + (aw / 2 + 1) + '" ry="' + (aw / 2 + 3) + '" fill="url(#av-skin)"/>';
     });
-    // Cou et tête
-    h += '<rect x="91" y="92" width="18" height="18" rx="7" fill="#D99E77"/>';
-    h += '<ellipse cx="73" cy="76" rx="5.5" ry="8" fill="#E2A982"/><ellipse cx="127" cy="76" rx="5.5" ry="8" fill="#E2A982"/>';
-    h += '<ellipse cx="100" cy="72" rx="27" ry="31" fill="url(#av-skin)"/>';
+    // Cou et tête, proportions et modelé inspirés des avatars 3D (Bitmoji)
+    h += '<path d="M90 96h20v16q-10 6-20 0z" fill="#DDA27B"/><path d="M90 100q10 9 20 0v6q-10 6-20 0z" fill="rgba(120,60,40,.22)"/>';
+    h += '<path d="M70 72q-6-1-6 6t6 9q3 1 4-2z" fill="#E7AE88"/><path d="M130 72q6-1 6 6t-6 9q-3 1-4-2z" fill="#E7AE88"/>' +
+      '<path d="M67 77q2-3 4 0M133 77q-2-3-4 0" stroke="#C98E68" stroke-width="1.4" fill="none"/>';
+    h += '<path d="M71 70Q70 43 100 41Q130 43 129 70Q129 88 120 98Q110 107 100 107Q90 107 80 98Q71 88 71 70Z" fill="url(#av-skin)"/>' +
+      '<path d="M76 92Q86 106 100 107Q114 106 124 92Q118 103 100 104Q82 103 76 92Z" fill="rgba(150,80,50,.16)"/>';
     // Coiffure : elle suit ton ressenti
     if (t.coiffure === 'bataille') {
-      h += '<path d="M73 72Q69 40 98 37Q128 37 128 70Q125 58 117 53L121 44L109 49L106 38L98 48L90 39L88 50L78 46L81 56Q75 61 73 72Z" fill="url(#av-hair)"/>' +
-        '<path d="M96 40q-6-10 2-14M111 43q6-8 13-6M80 50q-8-4-10-11" stroke="#3A291F" stroke-width="2.6" fill="none" stroke-linecap="round"/>';
+      h += '<path d="M70 76Q64 52 78 42Q76 31 88 34Q92 25 102 31Q113 24 118 34Q131 34 128 46Q137 56 130 76Q127 63 121 58Q118 65 111 58Q104 65 98 56Q90 64 84 57Q78 63 74 61Q71 67 70 76Z" fill="url(#av-hair)"/>' +
+        '<path d="M88 35q-3-5 1-8M106 30q2-5 7-6M121 37q5-2 8 1M76 46q-5-1-7-5" stroke="#3E2B20" stroke-width="3.4" fill="none" stroke-linecap="round"/>' +
+        '<path d="M84 44q6-4 10 2M100 40q6-5 12 0M114 44q5-2 8 3" stroke="rgba(255,220,190,.18)" stroke-width="2" fill="none" stroke-linecap="round"/>';
     } else if (t.coiffure === 'normale') {
-      h += '<path d="M73 73Q69 37 101 36Q131 37 127 73Q124 55 108 50Q92 56 78 58Q75 64 73 73Z" fill="url(#av-hair)"/>';
+      h += '<path d="M70 74Q66 44 96 37Q126 34 131 60Q131 68 130 74Q126 60 118 54Q104 58 88 54Q78 60 74 62Q71 66 70 74Z" fill="url(#av-hair)"/>' +
+        '<path d="M86 44q14-6 30 0M90 50q12-4 24-1" stroke="rgba(255,220,190,.18)" stroke-width="2" fill="none" stroke-linecap="round"/>';
     } else {
-      h += '<path d="M73 70Q69 34 99 29Q119 25 128 40Q132 53 127 70Q122 52 111 47Q96 51 80 54Q75 60 73 70Z" fill="url(#av-hair)"/><path d="M90 36q14-8 30 2" stroke="rgba(255,255,255,.22)" stroke-width="2.4" fill="none" stroke-linecap="round"/>';
+      h += '<path d="M70 72Q66 46 84 38Q92 25 110 27Q129 29 131 50Q132 62 130 72Q126 56 116 50Q100 52 84 52Q76 58 70 72Z" fill="url(#av-hair)"/>' +
+        '<path d="M88 36q12-8 28-4M86 44q16-6 34-2" stroke="rgba(255,220,190,.22)" stroke-width="2.2" fill="none" stroke-linecap="round"/>';
     }
-    // Visage : il suit ton ressenti des 7 derniers jours
-    var eyeY = t.humeur === 'triste' ? 78 : 76;
-    [89, 111].forEach(function (x) {
-      h += '<ellipse cx="' + x + '" cy="' + eyeY + '" rx="4.4" ry="' + (t.humeur === 'triste' ? 4 : 4.8) + '" fill="#fff"/><circle cx="' + x + '" cy="' + (eyeY + .6) + '" r="2.9" fill="#5B4636"/><circle cx="' + x + '" cy="' + (eyeY + .6) + '" r="1.4" fill="#1A120E"/><circle cx="' + (x + 1) + '" cy="' + (eyeY - .6) + '" r=".9" fill="#fff"/>';
-      if (t.humeur === 'triste') h += '<path d="M' + (x - 4.8) + ' ' + (eyeY - 2.2) + 'Q' + x + ' ' + (eyeY - 4.2) + ' ' + (x + 4.8) + ' ' + (eyeY - 2.2) + '" stroke="#C98E68" stroke-width="2.2" fill="none"/><path d="M' + (x - 3.5) + ' ' + (eyeY + 6.5) + 'q3.5 1.6 7 0" stroke="rgba(160,100,80,.35)" stroke-width="1.4" fill="none"/>';
+    // Yeux en amande, iris coloré, paupières : le visage suit ton ressenti des 7 derniers jours
+    var ey = 78, triste = t.humeur === 'triste';
+    [89, 111].forEach(function (x, i) {
+      var amande = 'M' + (x - 6.5) + ' ' + ey + 'Q' + x + ' ' + (ey - 6.5) + ' ' + (x + 6.5) + ' ' + ey + 'Q' + x + ' ' + (ey + 5) + ' ' + (x - 6.5) + ' ' + ey + 'Z';
+      h += '<clipPath id="av-eye' + i + '"><path d="' + amande + '"/></clipPath><path d="' + amande + '" fill="#fff"/>' +
+        '<g clip-path="url(#av-eye' + i + ')"><circle cx="' + x + '" cy="' + (ey + .3) + '" r="3.7" fill="#4C7DB3"/><circle cx="' + x + '" cy="' + (ey + .3) + '" r="3.7" fill="none" stroke="#2C4C70" stroke-width="1"/><circle cx="' + x + '" cy="' + (ey + .3) + '" r="1.7" fill="#14100D"/><circle cx="' + (x + 1.3) + '" cy="' + (ey - 1.1) + '" r="1" fill="#fff"/>' +
+        (triste ? '<path d="M' + (x - 8) + ' ' + (ey - 7) + 'H' + (x + 8) + 'V' + (ey - 1.4) + 'Q' + x + ' ' + (ey - 2.6) + ' ' + (x - 8) + ' ' + (ey - 0.6) + 'Z" fill="#EDBB93"/>' : '') + '</g>';
+      h += triste
+        ? '<path d="M' + (x - 6.8) + ' ' + (ey - .4) + 'Q' + x + ' ' + (ey - 2.8) + ' ' + (x + 6.8) + ' ' + (ey - 1.2) + '" stroke="#2A1C15" stroke-width="1.8" fill="none" stroke-linecap="round"/>'
+        : '<path d="M' + (x - 6.8) + ' ' + (ey + .2) + 'Q' + x + ' ' + (ey - 7) + ' ' + (x + 6.8) + ' ' + (ey - .4) + '" stroke="#2A1C15" stroke-width="1.8" fill="none" stroke-linecap="round"/>';
+      h += '<path d="M' + (x - 5) + ' ' + (ey + 4.2) + 'Q' + x + ' ' + (ey + 6) + ' ' + (x + 5) + ' ' + (ey + 4.2) + '" stroke="rgba(150,90,70,' + (triste ? '.45' : '.2') + ')" stroke-width="1.2" fill="none"/>';
     });
     var brows = {
-      triste: 'M81 69Q87 66 95 63M105 63Q113 66 119 69',
-      neutre: 'M82 66H95M105 66H118',
-      calme: 'M82 66Q88 63 95 65M105 65Q112 63 118 66',
-      joie: 'M82 65Q88 61 95 63M105 63Q112 61 118 65'
+      triste: 'M81 70Q87 67 95 65M105 65Q113 67 119 70',
+      neutre: 'M81 68Q88 66 95 67M105 67Q112 66 119 68',
+      calme: 'M81 68Q88 64 95 66M105 66Q112 64 119 68',
+      joie: 'M81 67Q88 62 95 64M105 64Q112 62 119 67'
     }[t.humeur];
-    h += '<path d="' + brows + '" stroke="#3A291F" stroke-width="2.6" fill="none" stroke-linecap="round"/>';
-    h += '<path d="M100 79q-3.5 6 .5 7.5" stroke="#C98E68" stroke-width="2" fill="none" stroke-linecap="round"/>';
-    var mouth = { triste: 'M92 94Q100 89 108 94', neutre: 'M92 92H108', calme: 'M91 90Q100 96 109 90', joie: 'M89 89Q100 101 111 89Z' }[t.humeur];
-    h += '<path d="' + mouth + '" stroke="#9A4A45" stroke-width="2.6" fill="' + (t.humeur === 'joie' ? '#fff' : 'none') + '" stroke-linecap="round" stroke-linejoin="round"/>';
-    if (t.humeur === 'joie' || t.humeur === 'calme') h += '<ellipse cx="80" cy="86" rx="5" ry="3" fill="#F08A8A" opacity=".3"/><ellipse cx="120" cy="86" rx="5" ry="3" fill="#F08A8A" opacity=".3"/>';
+    h += '<path d="' + brows + '" stroke="#3A291F" stroke-width="3.4" fill="none" stroke-linecap="round"/>';
+    // Nez modelé et bouche
+    h += '<path d="M101 80Q103 88 104 91" stroke="rgba(170,100,70,.35)" stroke-width="2" fill="none" stroke-linecap="round"/>' +
+      '<path d="M95.5 91.5Q100 95 104.5 91.5" stroke="#C98E68" stroke-width="1.6" fill="none" stroke-linecap="round"/><ellipse cx="99.5" cy="89.5" rx="2.4" ry="1.6" fill="rgba(255,235,220,.45)"/>';
+    var mouth = {
+      triste: '<path d="M92.5 100.5Q100 97 107.5 100.5" stroke="#9A4A45" stroke-width="2.2" fill="none" stroke-linecap="round"/><ellipse cx="100" cy="102.2" rx="4.2" ry="1.3" fill="#D98C82" opacity=".55"/>',
+      neutre: '<path d="M93 99Q100 99.6 107 99" stroke="#9A4A45" stroke-width="2.2" fill="none" stroke-linecap="round"/><ellipse cx="100" cy="101" rx="4" ry="1.2" fill="#D98C82" opacity=".5"/>',
+      calme: '<path d="M91.5 98Q100 103 108.5 98" stroke="#9A4A45" stroke-width="2.2" fill="none" stroke-linecap="round"/><ellipse cx="100" cy="102.4" rx="4" ry="1.1" fill="#D98C82" opacity=".45"/>',
+      joie: '<path d="M90 97Q100 99 110 97Q107 106 100 106Q93 106 90 97Z" fill="#fff" stroke="#9A4A45" stroke-width="2" stroke-linejoin="round"/>'
+    }[t.humeur];
+    h += mouth;
+    if (t.humeur === 'joie' || t.humeur === 'calme') h += '<ellipse cx="80" cy="90" rx="5.5" ry="3" fill="#F08A8A" opacity=".28"/><ellipse cx="120" cy="90" rx="5.5" ry="3" fill="#F08A8A" opacity=".28"/>';
     // Lunettes : elles suivent les projets perso
-    if (t.lunettes === 'rondes') h += '<g stroke="#20242E" stroke-width="2.2" fill="rgba(255,255,255,.12)"><circle cx="89" cy="76" r="8"/><circle cx="111" cy="76" r="8"/><path d="M97 76h6M81 74l-8-2M119 74l8-2" fill="none"/></g>';
-    if (t.lunettes === 'design') h += '<g stroke="#111" stroke-width="2.6" fill="rgba(60,240,255,.16)"><rect x="79" y="69" width="20" height="14" rx="4"/><rect x="101" y="69" width="20" height="14" rx="4"/><path d="M99 75h2M79 73l-7-2M121 73l7-2" fill="none"/></g>';
+    if (t.lunettes === 'rondes') h += '<g stroke="#20242E" stroke-width="2.2" fill="rgba(255,255,255,.12)"><circle cx="89" cy="78" r="9"/><circle cx="111" cy="78" r="9"/><path d="M98 77h4M80 76l-9-2M120 76l9-2" fill="none"/></g>';
+    if (t.lunettes === 'design') h += '<g stroke="#111" stroke-width="2.6" fill="rgba(60,240,255,.14)"><rect x="78" y="71" width="21" height="15" rx="4.5"/><rect x="101" y="71" width="21" height="15" rx="4.5"/><path d="M99 77h2M78 75l-7-2M122 75l7-2" fill="none"/></g>';
     return h + '</svg>';
   }
   function objById(id) { return list('objectifs').filter(function (o) { return o.id === id; })[0]; }
