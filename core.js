@@ -123,7 +123,31 @@
   }
   var BUCKET_LABEL = { '8-10': 'avant 10 h', '10-12': 'entre 10 h et 12 h', '12-14': 'entre 12 h et 14 h',
                        '14-16': 'entre 14 h et 16 h', '16-18': 'entre 16 h et 18 h', '18-20': 'après 18 h' };
-  var SEUILS = { coef: 5, jours_capacite: 2, fond_places: 10, glisse: 5 };
+  var SEUILS = { coef: 5, jours_capacite: 2, fond_places: 10, glisse: 5, preuve_cas: 7, preuve_semaines: 3, fenetre: 28,
+    suspension_n: 10, suspension_taux: 0.7, observation: 28 };
+
+  /* Seuil de preuve de TRINITY 2.0 : au moins 7 cas sur les 4 dernières semaines, répartis sur 3 semaines
+     différentes au moins, ou bien une habitude hebdomadaire présente chacune des 4 dernières semaines. */
+  function assez(dates, today) {
+    var m = mondayOf(today), from = addDays(m, -SEUILS.fenetre);
+    var recent = (dates || []).filter(function (x) { return x && x >= from && x < today; });
+    var weeks = {};
+    recent.forEach(function (x) { weeks[mondayOf(x)] = (weeks[mondayOf(x)] || 0) + 1; });
+    var nw = Object.keys(weeks).length;
+    var ok = recent.length >= SEUILS.preuve_cas && nw >= SEUILS.preuve_semaines;
+    var hebdo = true;
+    for (var i = 1; i <= 4; i++) if (!weeks[addDays(m, -7 * i)]) hebdo = false;
+    return { ok: ok || hebdo, n: recent.length, semaines: nw, hebdo: hebdo && !ok };
+  }
+  function preuveTxt(a) {
+    return a.hebdo ? 'chaque semaine depuis 4 semaines' : a.n + ' cas en 4 semaines, sur ' + a.semaines + ' semaines différentes';
+  }
+  /* Période d'observation : aucune recommandation pendant les 4 semaines qui suivent la mise en service */
+  function observation(params, today) {
+    var d = params && params.v2_debut;
+    if (!d || !today) return 0;
+    return Math.max(0, diffDays(today, addDays(String(d).slice(0, 10), SEUILS.observation)));
+  }
 
   function num(v) { var n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; }
 
@@ -135,10 +159,14 @@
     var done = journal.filter(function (e) { return e.action === 'fait' && num(e.duree_reelle) && num(e.duree_prevue); });
     res.n_faits = done.length;
     ['type', 'entite'].forEach(function (dim) {
-      var groups = {};
-      done.forEach(function (e) { var k = e[dim]; if (!k) return; (groups[k] = groups[k] || []).push(num(e.duree_reelle) / num(e.duree_prevue)); });
+      var groups = {}, dates = {};
+      done.forEach(function (e) {
+        var k = e[dim]; if (!k) return;
+        (groups[k] = groups[k] || []).push(num(e.duree_reelle) / num(e.duree_prevue));
+        (dates[k] = dates[k] || []).push(String(e.horodatage).slice(0, 10));
+      });
       Object.keys(groups).forEach(function (k) {
-        res.coef[dim + ':' + k] = { n: groups[k].length, ratio: median(groups[k]) };
+        res.coef[dim + ':' + k] = { n: groups[k].length, ratio: median(groups[k]), dates: dates[k] };
       });
     });
     // Capacité réelle par jour de la semaine, sur 28 jours
@@ -167,12 +195,13 @@
       if (e.jour >= today) return; // la journée n'est pas finie
       var b = bucketOf(e.debut); if (!b) return;
       var key = (e.type || 'Autre') + ':' + b;
-      var g = res.creneaux[key] = res.creneaux[key] || { places: 0, faits: 0 };
-      g.places++; if (doneOn[k]) g.faits++;
+      var g = res.creneaux[key] = res.creneaux[key] || { places: 0, faits: 0, dates: [], datesReport: [] };
+      g.places++; g.dates.push(e.jour);
+      if (doneOn[k]) g.faits++; else g.datesReport.push(e.jour);
     });
     Object.keys(res.creneaux).forEach(function (k) {
       var g = res.creneaux[k]; g.taux = g.places ? g.faits / g.places : null;
-      res.glisse[k] = { places: g.places, reportes: g.places - g.faits, taux: g.places ? 1 - g.taux : null };
+      res.glisse[k] = { places: g.places, reportes: g.places - g.faits, taux: g.places ? 1 - g.taux : null, dates: g.datesReport };
     });
     res.marge = marge;
     return res;
@@ -189,12 +218,15 @@
     return found;
   }
 
-  function suggestions(st, regles, params) {
+  /* today est facultatif pour la compatibilité ; avec lui, le seuil de preuve et l'observation s'appliquent */
+  function suggestions(st, regles, params, today) {
     var out = [], idx = ruleIndex(regles);
+    if (today && observation(params, today) > 0) return out;
+    function prouve(dates) { return today ? assez(dates, today) : { ok: true, n: (dates || []).length, semaines: 0 }; }
     function already(cle, val) {
       return (idx[cle] || []).some(function (r) {
         var v = num(r.valeur), w = num(val);
-        if (r.statut === 'refusee' && (v === null || w === null || Math.abs(v - w) < 0.15)) return true;
+        if ((r.statut === 'refusee' || r.statut === 'suspendue') && (v === null || w === null || Math.abs(v - w) < 0.15)) return true;
         if (r.statut === 'proposee') return true;
         if (r.statut === 'acceptee' && (v === null || w === null ? String(r.valeur) === String(val) : Math.abs(v - w) < 0.08)) return true;
         return false;
@@ -211,11 +243,12 @@
       if (Math.abs(r - (1 + st.marge)) < 0.1) return;
       var cle = 'coef:' + k;
       if (already(cle, r)) return;
+      var pv = prouve(c.dates); if (!pv.ok) return;
       var parts = k.split(':'), label = parts[0] === 'type' ? 'de type ' + parts[1] : 'pour ' + parts[1];
       out.push({
         cle: cle, categorie: 'duree', valeur: String(r),
         texte: 'Tes tâches ' + label + ' prennent ' + String(r).replace('.', ',') + ' fois le temps prévu. Utiliser ce coefficient à la place de la marge de ' + Math.round(st.marge * 100) + ' % ?',
-        preuve: c.n + ' tâches terminées, médiane des durées réelles divisées par les durées prévues'
+        preuve: c.n + ' tâches terminées, dont ' + (today ? preuveTxt(pv) : c.n + ' cas') + ', médiane des durées réelles divisées par les durées prévues'
       });
     });
     // Plus de plafond fixe : la capacité est calculée chaque jour (dayBudget), elle ne s'apprend plus ici.
@@ -231,11 +264,12 @@
       });
       if (best && worst && best.k !== worst.k && best.g.taux - worst.g.taux >= 0.2) {
         var b = best.k.split(':')[1];
-        if (!already('creneau:Fond', b)) {
+        var pvf = prouve(fond.reduce(function (a, k) { return a.concat(st.creneaux[k].dates || []); }, []));
+        if (!already('creneau:Fond', b) && pvf.ok) {
           out.push({
             cle: 'creneau:Fond', categorie: 'creneau', valeur: b,
             texte: 'Ton travail de fond placé ' + BUCKET_LABEL[b] + ' est terminé ' + best.g.faits + ' fois sur ' + best.g.places + ', contre ' + worst.g.faits + ' sur ' + worst.g.places + ' ' + BUCKET_LABEL[worst.k.split(':')[1]] + '. Placer le fond ' + BUCKET_LABEL[b] + ' en priorité ?',
-            preuve: totalFond + ' tâches de fond placées sur des journées terminées'
+            preuve: totalFond + ' tâches de fond placées sur des journées terminées' + (today ? ', ' + preuveTxt(pvf) : '')
           });
         }
       }
@@ -245,10 +279,11 @@
       if (g.places < SEUILS.glisse || g.taux < 0.5) return;
       var p = k.split(':'), cle = 'eviter:' + k;
       if (already(cle, 1)) return;
+      var pvg = prouve(g.dates); if (!pvg.ok) return;
       out.push({
         cle: cle, categorie: 'glisse', valeur: '1',
         texte: 'Tes tâches de type ' + p[0] + ' placées ' + BUCKET_LABEL[p[1]] + ' sont reportées ' + g.reportes + ' fois sur ' + g.places + '. Éviter ce créneau pour elles ?',
-        preuve: g.places + ' placements sur des journées terminées'
+        preuve: g.places + ' placements sur des journées terminées' + (today ? ', reports : ' + preuveTxt(pvg) : '')
       });
     });
     return out;
@@ -309,6 +344,9 @@
     var workday = w <= 5 && !cours;
     var obl = workday ? ranges(params.obligatoire || '09:00-12:00,14:00-18:00') : [];
     var oblig = obl.reduce(function (s, r) { return s + r[1] - r[0]; }, 0);
+    // Créneaux bloqués pendant les heures obligatoires : ce temps n'est plus disponible pour le travail
+    var blq = num((opts.creneaux || {}).bloque_oblig) || 0;
+    if (blq) oblig = Math.max(0, oblig - blq);
     var sl = sleepSpan(params);
     var c = { travail_oblig: 0, travail_add: 0, revision: 0, projets: 0, sport: 0, social: 0, perso: 0, interstices: 0 };
     var horsSommeil = false, fait = 0;
@@ -319,6 +357,8 @@
       var inside = obl.reduce(function (s, r) { return s + overlap(a, a + d, r[0], r[1]); }, 0);
       c.travail_oblig += inside; c.travail_add += d - inside;
     }
+    // Plages TRINITY (repos, social, sport, perso) : opts.creneaux = { sport: min, social: min, perso: min }
+    Object.keys(opts.creneaux || {}).forEach(function (k) { if (c[k] !== undefined) c[k] += num(opts.creneaux[k]) || 0; });
     seances.forEach(function (x) {
       var cat = category(x), d = num(x.min) || 0;
       if (cat === 'travail') { addWork(toMin(x.debut), d); fait += d; } else if (c[cat] !== undefined) c[cat] += d;
@@ -392,7 +432,9 @@
     var md = toMin(params.midi_debut), mf = toMin(params.midi_fin);
     if (md !== null && mf !== null) busy.push([md, mf]);
     events.forEach(function (e) {
-      if (e.journee || !e.debut) return;
+      if (!e.debut) return;
+      // Un créneau bloqué sur la journée entière (ex. ventes privées) occupe toute la plage de travail
+      if (e.journee) { if (e.source === 'trinity' && e.jour_debut <= day && (e.jour_fin || e.jour_debut) >= day) busy.push([0, 1440]); return; }
       var s = new Date(e.debut), f = new Date(e.fin);
       if (ymd(s) !== day) return;
       busy.push([s.getHours() * 60 + s.getMinutes(), f.getHours() * 60 + f.getMinutes()]);
@@ -414,7 +456,7 @@
   function isCoursDay(day, events, params) {
     var mot = norm(params.mot_cours || 'Cours');
     return events.some(function (e) {
-      if (!e.debut) return false;
+      if (!e.debut || e.source === 'trinity') return false;
       if (e.source === 'ecole') return ymd(new Date(e.debut)) === day; // emploi du temps de l'université
       if (!e.titre) return false;
       return ymd(new Date(e.debut)) === day && norm(e.titre).indexOf(mot) !== -1;
@@ -447,7 +489,8 @@
       if (cours && t.type === 'Fond') return false;
       var dc = correctedDuration(t, regles, params);
       if (used + dc > cap) return false;
-      var order = free.map(function (f, i) { return i; });
+      var coefR = acceptedRule(regles, 'coef:type:' + t.type) || acceptedRule(regles, 'coef:entite:' + t.entite);
+      var order = free.map(function (f, i) { return i; }), evite = null;
       if (prefBucket) {
         order.sort(function (a, b) {
           var ba = bucketOf(fromMin(free[a][0])) === prefBucket ? 0 : 1, bb = bucketOf(fromMin(free[b][0])) === prefBucket ? 0 : 1;
@@ -459,8 +502,10 @@
       for (var k = 0; k < order.length; k++) {
         var f = free[order[k]], s0 = minStart !== null ? Math.max(f[0], minStart) : f[0];
         if (f[1] - s0 < d) continue;
-        if (avoid.indexOf(t.type + ':' + bucketOf(fromMin(s0))) !== -1) continue;
-        plan.push({ tache_id: t.id, debut: fromMin(s0), duree_min: d, raison: raison });
+        if (avoid.indexOf(t.type + ':' + bucketOf(fromMin(s0))) !== -1) { evite = acceptedRule(regles, 'eviter:' + t.type + ':' + bucketOf(fromMin(s0))); continue; }
+        // La règle qui a pesé sur cette proposition, pour mesurer ensuite son taux d'acceptation
+        var regle = (prefBucket && fondRule && t.type === 'Fond' && bucketOf(fromMin(s0)) === fondRule.valeur ? fondRule : null) || evite || coefR;
+        plan.push({ tache_id: t.id, debut: fromMin(s0), duree_min: d, raison: raison + (regle ? ', selon une règle apprise' : ''), regle: regle ? regle.id : '' });
         if (s0 > f[0]) { free.push([s0 + d, f[1]]); f[1] = s0; } else f[0] += d;
         used += dc;
         return true;
@@ -489,13 +534,49 @@
           var dc = correctedDuration(t, regles, params);
           if (used + dc > cap) return;
           var d = num(t.duree_min) || 10;
-          plan.push({ tache_id: t.id, debut: fromMin(slot[0]), duree_min: d, raison: 'Bloc de relances' });
+          plan.push({ tache_id: t.id, debut: fromMin(slot[0]), duree_min: d, raison: 'Bloc de relances', regle: pref ? pref.id : '' });
           slot[0] += d; used += dc;
         });
       }
     }
     plan.sort(function (a, b) { return toMin(a.debut) - toMin(b.debut); });
     return { plan: plan, capacite: cap, cours: cours, charge: used };
+  }
+
+  /* Suivi des règles : taux d'acceptation des propositions qu'elles ont influencées */
+  function ruleStats(regle, plan) {
+    var depuis = String(regle.decide_le || '');
+    var vus = (plan || []).filter(function (p) { return p.regle === regle.id && (p.statut === 'accepte' || p.statut === 'refuse') && (!depuis || String(p.cree_le || '') >= depuis); });
+    var acc = vus.filter(function (p) { return p.statut === 'accepte'; }).length;
+    var n = vus.length, taux = n ? acc / n : null;
+    return { n: n, acceptees: acc, taux: taux, suspendre: n >= SEUILS.suspension_n && taux < SEUILS.suspension_taux };
+  }
+  /* Effet réel d'une règle : la même mesure avant et après son acceptation (4 semaines de chaque côté) */
+  function ruleEffect(regle, journal, today) {
+    var d0 = String(regle.decide_le || regle.cree_le || '').slice(0, 10);
+    if (!d0) return null;
+    var avant0 = addDays(d0, -SEUILS.fenetre), apres1 = addDays(d0, SEUILS.fenetre);
+    var cle = String(regle.cle || ''), p = cle.split(':');
+    function per(a, b) {
+      var j = (journal || []).filter(function (e) { var x = String(e.horodatage).slice(0, 10); return x >= a && x < b && x < today; });
+      if (p[0] === 'coef') {
+        var r = j.filter(function (e) { return e.action === 'fait' && e[p[1]] === p.slice(2).join(':') && num(e.duree_reelle) && num(e.duree_prevue); });
+        if (!r.length) return null;
+        var c = p[1] === 'type' || p[1] === 'entite' ? num(regle.valeur) || 1 : 1;
+        // écart moyen entre la durée réelle et la durée prévue corrigée
+        return { n: r.length, v: r.reduce(function (s, e) { return s + Math.abs(num(e.duree_reelle) / (num(e.duree_prevue) * c) - 1); }, 0) / r.length, unite: 'ecart' };
+      }
+      var type = p[0] === 'creneau' ? p[1] : p[1];
+      var placed = {}, fait = {};
+      j.forEach(function (e) {
+        if ((e.action === 'place' || e.action === 'deplace') && e.jour && e.type === type) placed[e.tache_id + '|' + e.jour] = 1;
+        if (e.action === 'fait') fait[e.tache_id + '|' + String(e.horodatage).slice(0, 10)] = 1;
+      });
+      var ks = Object.keys(placed); if (!ks.length) return null;
+      return { n: ks.length, v: ks.filter(function (k) { return fait[k]; }).length / ks.length, unite: 'tenu' };
+    }
+    var av = per(avant0, d0), ap = per(d0, apres1 < today ? apres1 : today);
+    return { avant: av, apres: ap, depuis: d0, complet: apres1 <= today };
   }
 
   /* Recaler une journée quand une tâche commence en retard : les tâches suivantes glissent
@@ -537,7 +618,8 @@
     capacityFor: capacityFor, dayBudget: dayBudget, ranges: ranges, sleepSpan: sleepSpan, category: category, cascade: cascade,
     PERSO: PERSO, INTERSTICE: INTERSTICE, INTERSTICES: INTERSTICES, isPerso: isPerso, isInterstice: isInterstice, isWork: isWork, rootId: rootId,
     freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank,
-    bucketOf: bucketOf, acceptedRule: acceptedRule, num: num, norm: norm
+    bucketOf: bucketOf, acceptedRule: acceptedRule, num: num, norm: norm,
+    assez: assez, observation: observation, ruleStats: ruleStats, ruleEffect: ruleEffect
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(this);

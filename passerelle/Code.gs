@@ -12,12 +12,21 @@ var COLUMNS = {
            'contexte', 'origine', 'cree_le', 'maj_le', 'fait_le', 'duree_reelle_min', 'notion_url', 'suite_de', 'etape', 'cloche'],
   Journal: ['horodatage', 'tache_id', 'action', 'jour', 'debut', 'duree_prevue', 'duree_reelle', 'type', 'entite', 'prio', 'detail'],
   Regles: ['id', 'texte', 'categorie', 'cle', 'valeur', 'preuve', 'statut', 'source', 'cree_le', 'decide_le'],
-  Plan: ['id', 'jour', 'tache_id', 'debut', 'duree_min', 'raison', 'statut', 'auteur', 'cree_le'],
+  Plan: ['id', 'jour', 'tache_id', 'debut', 'duree_min', 'raison', 'statut', 'auteur', 'cree_le', 'regle'],
   Humeur: ['jour', 'note', 'pourquoi', 'horodatage'],
   Parametres: ['cle', 'valeur', 'note'],
   Notifications: ['id', 'type', 'cible', 'titre', 'corps', 'cree_le', 'envoye_le', 'vue_le', 'resultat'],
-  Abonnements: ['endpoint', 'appareil', 'cree_le', 'maj_le', 'echecs']
+  Abonnements: ['endpoint', 'appareil', 'cree_le', 'maj_le', 'echecs'],
+  // TRINITY 2.0 : vie personnelle
+  Sante: ['jour', 'pas', 'sommeil_min', 'coucher', 'lever', 'source', 'maj_le'],
+  Vie: ['id', 'jour', 'type', 'valeur', 'lieu', 'prix', 'note', 'horodatage'],
+  Creneaux: ['id', 'titre', 'categorie', 'jour_debut', 'jour_fin', 'debut', 'fin', 'note', 'commentaire', 'statut', 'cree_le', 'maj_le'],
+  Objectifs: ['id', 'titre', 'horizon', 'branche', 'mesure', 'unite', 'cible', 'sens', 'echeance', 'statut', 'cree_le', 'maj_le'],
+  Mesures: ['id', 'objectif_id', 'mois', 'valeur', 'preuve', 'horodatage'],
+  Competences: ['id', 'nom', 'branche', 'niveaux', 'niveau', 'preuve', 'evalue_le', 'statut', 'cree_le', 'maj_le']
 };
+var VERSION = 2;
+var EXTRA = { sante: ['Sante', 'jour'], vie: ['Vie', 'id'], creneau: ['Creneaux', 'id'], objectif: ['Objectifs', 'id'], mesure: ['Mesures', 'id'], competence: ['Competences', 'id'] };
 
 var DEFAULT_PARAMS = [
   ['journee_debut', '09:00', 'Début de la journée de travail'],
@@ -73,8 +82,8 @@ function readSheet_(name) {
       var v = r[i];
       if (v instanceof Date) {
         // Les cellules jour et échéance sont des dates, debut est une heure.
-        if (h === 'debut') v = Utilities.formatDate(v, tz, 'HH:mm');
-        else if (h === 'jour' || h === 'echeance') v = Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+        if (h === 'debut' || h === 'fin' || h === 'coucher' || h === 'lever') v = Utilities.formatDate(v, tz, 'HH:mm');
+        else if (h === 'jour' || h === 'echeance' || h === 'jour_debut' || h === 'jour_fin') v = Utilities.formatDate(v, tz, 'yyyy-MM-dd');
         else v = Utilities.formatDate(v, tz, "yyyy-MM-dd'T'HH:mm:ss");
       }
       o[h] = v;
@@ -83,9 +92,20 @@ function readSheet_(name) {
   });
 }
 
-function upsert_(name, keyField, obj) {
+/* Un onglet manquant (setup() pas encore relancé) est créé à la première écriture */
+function onglet_(name) {
   var sh = ss_().getSheetByName(name);
+  if (sh) return sh;
+  sh = ss_().insertSheet(name);
+  sh.getRange(1, 1, 1, COLUMNS[name].length).setValues([COLUMNS[name]]);
+  sh.setFrozenRows(1);
+  return sh;
+}
+
+function upsert_(name, keyField, obj) {
+  var sh = onglet_(name);
   var head = COLUMNS[name];
+  if (sh.getLastColumn() < head.length) sh.getRange(1, 1, 1, head.length).setValues([head]); // nouvelle colonne ajoutée
   var data = sh.getDataRange().getValues();
   var keyIdx = head.indexOf(keyField);
   var rowIdx = -1;
@@ -94,7 +114,8 @@ function upsert_(name, keyField, obj) {
   }
   var base = rowIdx > 0 ? data[rowIdx - 1] : head.map(function () { return ''; });
   var row = head.map(function (h, i) {
-    return Object.prototype.hasOwnProperty.call(obj, h) ? (obj[h] === null ? '' : obj[h]) : base[i];
+    if (Object.prototype.hasOwnProperty.call(obj, h)) return obj[h] === null || obj[h] === undefined ? '' : obj[h];
+    return base[i] === undefined ? '' : base[i];
   });
   // Texte brut pour les dates et heures : évite les conversions automatiques de Sheets.
   if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, head.length).setNumberFormat('@').setValues([row]);
@@ -106,7 +127,7 @@ function upsert_(name, keyField, obj) {
 
 function append_(name, objs) {
   if (!objs.length) return;
-  var sh = ss_().getSheetByName(name);
+  var sh = onglet_(name);
   var head = COLUMNS[name];
   var rows = objs.map(function (o) { return head.map(function (h) { return o[h] === undefined || o[h] === null ? '' : o[h]; }); });
   var start = sh.getLastRow() + 1;
@@ -238,6 +259,13 @@ function doGet(e) {
     regles: readSheet_('Regles'),
     plan: readSheet_('Plan').filter(function (r) { return !from || (r.jour >= from && r.jour <= to); }),
     humeur: readSheet_('Humeur'),
+    sante: readSheet_('Sante').filter(function (r) { return String(r.jour) >= jourMoins_(120); }),
+    vie: readSheet_('Vie').filter(function (r) { return String(r.jour) >= jourMoins_(120); }),
+    creneaux: readSheet_('Creneaux'),
+    objectifs: readSheet_('Objectifs'),
+    mesures: readSheet_('Mesures'),
+    competences: readSheet_('Competences'),
+    version: VERSION,
     parametres: params,
     evenements: from ? events_(from, to, params) : [],
     base_id: ss_().getId()
@@ -260,10 +288,52 @@ function doPost(e) {
       else if (op.type === 'plan') upsert_('Plan', 'id', op.data);
       else if (op.type === 'humeur') upsert_('Humeur', 'jour', op.data);
       else if (op.type === 'parametre') upsert_('Parametres', 'cle', op.data);
+      else if (op.type === 'sante_brut') santeBrute_(op.data);
+      else if (EXTRA[op.type]) upsert_(EXTRA[op.type][0], EXTRA[op.type][1], op.data);
     });
     if (taches) majCloches_(); // une cloche activée, déplacée ou une tâche faite : la veille suit tout de suite
     return json_({ ok: true, traites: ops.length, resultat: resultat });
   } finally {
     lock.releaseLock();
   }
+}
+function jourMoins_(n) { var d = new Date(); d.setDate(d.getDate() - n); return Utilities.formatDate(d, 'Europe/Paris', 'yyyy-MM-dd'); }
+
+/* Données envoyées par le raccourci iPhone « TRINITY Santé ».
+   data : { jour, pas, sommeil_debuts: [dates ISO], sommeil_fins: [dates ISO], source }
+   Le sommeil de la nuit qui précède « jour » : premier coucher, dernier lever, durée sans double compte.
+   Sans montre, l'iPhone n'enregistre que le temps au lit : la durée est alors une estimation. */
+function santeBrute_(d) {
+  var jour = String(d.jour || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(jour)) return;
+  var row = { jour: jour, maj_le: Utilities.formatDate(new Date(), 'Europe/Paris', "yyyy-MM-dd'T'HH:mm:ss") };
+  var pas = parseFloat(String(d.pas == null ? '' : d.pas).replace(',', '.'));
+  if (!isNaN(pas)) row.pas = Math.round(pas);
+  var deb = liste_(d.sommeil_debuts), fin = liste_(d.sommeil_fins), spans = [];
+  // Fenêtre de la nuit, à l'heure de Paris : de la veille 18 h au jour même 14 h (une sieste de l'après-midi n'est pas comptée)
+  var midi = Utilities.parseDate(jour + ' 14:00', 'Europe/Paris', 'yyyy-MM-dd HH:mm'), veille = new Date(midi.getTime() - 20 * 3600 * 1000);
+  for (var i = 0; i < Math.min(deb.length, fin.length); i++) {
+    var a = new Date(deb[i]), b = new Date(fin[i]);
+    if (isNaN(a) || isNaN(b) || b <= a) continue;
+    if (b <= veille || a >= midi) continue; // seulement la nuit qui précède ce jour
+    spans.push([a.getTime(), b.getTime()]);
+  }
+  if (spans.length) {
+    spans.sort(function (x, y) { return x[0] - y[0]; });
+    var tot = 0, cur = null;
+    spans.forEach(function (s) {
+      if (!cur || s[0] > cur[1]) { if (cur) tot += cur[1] - cur[0]; cur = [s[0], s[1]]; } else cur[1] = Math.max(cur[1], s[1]);
+    });
+    tot += cur[1] - cur[0];
+    row.sommeil_min = Math.round(tot / 60000);
+    row.coucher = Utilities.formatDate(new Date(spans[0][0]), 'Europe/Paris', 'HH:mm');
+    row.lever = Utilities.formatDate(new Date(Math.max.apply(null, spans.map(function (s) { return s[1]; }))), 'Europe/Paris', 'HH:mm');
+  }
+  row.source = String(d.source || 'iphone');
+  upsert_('Sante', 'jour', row);
+}
+function liste_(v) {
+  if (!v) return [];
+  if (Object.prototype.toString.call(v) === '[object Array]') return v;
+  return String(v).split(/\n|;/).map(function (x) { return x.trim(); }).filter(String);
 }
