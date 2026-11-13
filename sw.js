@@ -1,6 +1,6 @@
 /* Garde le site disponible hors ligne ; les données passent toujours par le réseau. */
-var CACHE = 'trinity-v10';
-var SHELL = ['./', 'index.html', 'style.css?v=10', 'core.js?v=10', 'vie.js?v=10', 'app.js?v=10', 'manifest.webmanifest', 'icon.svg', 'icon-192.png'];
+var CACHE = 'trinity-v11';
+var SHELL = ['./', 'index.html', 'style.css?v=11', 'core.js?v=11', 'vie.js?v=11', 'app.js?v=11', 'manifest.webmanifest', 'icon.svg', 'icon-192.png'];
 self.addEventListener('install', function (e) { e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); })); });
 self.addEventListener('activate', function (e) { e.waitUntil(caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k !== CACHE && k !== 'trinity-cfg'; }).map(function (k) { return caches.delete(k); })); }).then(function () { return self.clients.claim(); })); });
 self.addEventListener('fetch', function (e) {
