@@ -12,6 +12,9 @@
   function isPerso(t) { return t && t.type === PERSO; }
   function isInterstice(t) { return t && t.type === INTERSTICE; }
   function isWork(t) { return t && !isPerso(t) && !isInterstice(t); }
+  // Tâche professionnelle (une des entités du groupe) : seule à être proposée pendant les heures obligatoires
+  var PRO = ['ETS MAURAGE', 'LRB', '1001 Fenêtres', '1001 Travaux', 'Fili Floc'];
+  function isPro(t) { return isWork(t) && PRO.indexOf(t.entite) !== -1; }
   function rootId(t) { return (t && (t.suite_de || t.id)) || ''; }
   var STATUTS = ['À faire', 'En cours', 'En attente', 'Fait'];
   var PRIOS = { 1: 'Rouge', 2: 'Orange', 3: 'Vert', 4: 'Noir' };
@@ -359,6 +362,8 @@
     }
     // Plages TRINITY (repos, social, sport, perso) : opts.creneaux = { sport: min, social: min, perso: min }
     Object.keys(opts.creneaux || {}).forEach(function (k) { if (c[k] !== undefined) c[k] += num(opts.creneaux[k]) || 0; });
+    // Créneaux de travail (accompagner JSM…) : du travail sans tâche
+    ((opts.creneaux || {}).travail_spans || []).forEach(function (r) { addWork(r[0], r[1] - r[0]); });
     seances.forEach(function (x) {
       var cat = category(x), d = num(x.min) || 0;
       if (cat === 'travail') { addWork(toMin(x.debut), d); fait += d; } else if (c[cat] !== undefined) c[cat] += d;
@@ -474,6 +479,7 @@
     var used = num(opts.extraUsed) || 0;
     tasks.forEach(function (t) { if (t.jour === day && t.debut && t.statut !== 'Fait' && isWork(t)) used += correctedDuration(t, regles, params); });
     var telMin = toMin(params.tel_debut || '17:00');
+    var obl = weekday(day) <= 5 && !cours ? ranges(params.obligatoire || '09:00-12:00,14:00-18:00') : [];
     var free = freeSlots(day, events, tasks, params, opts.from);
     var fondRule = acceptedRule(regles, 'creneau:Fond');
     var avoid = regles.filter(function (r) { return r.statut === 'acceptee' && r.cle.indexOf('eviter:') === 0; })
@@ -483,7 +489,7 @@
     }).sort(function (a, b) { return rank(a, today, params) - rank(b, today, params); });
     var plan = [];
     var groupables = [], others = [];
-    cands.forEach(function (t) { (t.type === 'Relance' || t.type === 'Rapide' ? groupables : others).push(t); });
+    cands.forEach(function (t) { ((t.type === 'Relance' || t.type === 'Rapide') && isPro(t) ? groupables : others).push(t); });
     function place(t, prefBucket, raison) {
       var d = num(t.duree_min) || 30;
       if (cours && t.type === 'Fond') return false;
@@ -501,6 +507,8 @@
       var minStart = t.type === 'Prospection tél' && telMin !== null ? telMin : null;
       for (var k = 0; k < order.length; k++) {
         var f = free[order[k]], s0 = minStart !== null ? Math.max(f[0], minStart) : f[0];
+        // Pendant le travail obligatoire, rien que du travail : Master, Perso, Sport… passent après
+        if (!isPro(t)) obl.forEach(function (r) { if (overlap(s0, s0 + d, r[0], r[1]) > 0) s0 = Math.max(s0, r[1]); });
         if (f[1] - s0 < d) continue;
         if (avoid.indexOf(t.type + ':' + bucketOf(fromMin(s0))) !== -1) { evite = acceptedRule(regles, 'eviter:' + t.type + ':' + bucketOf(fromMin(s0))); continue; }
         // La règle qui a pesé sur cette proposition, pour mesurer ensuite son taux d'acceptation
@@ -616,7 +624,7 @@
     mondayOf: mondayOf, diffDays: diffDays, longDate: longDate, shortDate: shortDate, fmtDur: fmtDur, JOURS: JOURS,
     parseQuick: parseQuick, stats: stats, suggestions: suggestions, correctedDuration: correctedDuration,
     capacityFor: capacityFor, dayBudget: dayBudget, ranges: ranges, sleepSpan: sleepSpan, category: category, cascade: cascade,
-    PERSO: PERSO, INTERSTICE: INTERSTICE, INTERSTICES: INTERSTICES, isPerso: isPerso, isInterstice: isInterstice, isWork: isWork, rootId: rootId,
+    PERSO: PERSO, INTERSTICE: INTERSTICE, INTERSTICES: INTERSTICES, isPerso: isPerso, isInterstice: isInterstice, isWork: isWork, isPro: isPro, PRO: PRO, rootId: rootId,
     freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank,
     bucketOf: bucketOf, acceptedRule: acceptedRule, num: num, norm: norm,
     assez: assez, observation: observation, ruleStats: ruleStats, ruleEffect: ruleEffect

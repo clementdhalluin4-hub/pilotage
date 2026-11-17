@@ -36,6 +36,7 @@
   /* ===================== Créneaux ===================== */
   var CATS = {
     bloque: { label: 'Bloqué', aide: 'Tu n\'es pas disponible : TRINITY ne place rien dessus.' },
+    travail: { label: 'Travail', aide: 'Du travail qui n\'est pas une tâche (accompagner JSM, salon, chantier) : compté dans ton temps de travail, TRINITY ne place rien dessus.' },
     repos: { label: 'Repos', aide: 'Un temps pour souffler, compté dans ta journée.' },
     social: { label: 'Social', aide: 'Compté dans tes heures sociales de la semaine.' },
     sport: { label: 'Sport', aide: 'Compté dans tes séances de la semaine.' },
@@ -76,6 +77,12 @@
     crensOn(day).forEach(function (c) {
       var k = CAT_BUDGET[c.categorie];
       if (k && c.debut && c.fin) o[k] = (o[k] || 0) + crenMin(c);
+      // Créneau de travail : compté comme du travail (obligatoire ou additionnel selon l'heure)
+      if (c.categorie === 'travail') {
+        o.travail_spans = o.travail_spans || [];
+        if (c.debut && c.fin) { var ta = C.toMin(c.debut), tb = C.toMin(c.fin) > ta ? C.toMin(c.fin) : 1440; o.travail_spans.push([ta, tb]); }
+        else obl.forEach(function (r) { o.travail_spans.push([r[0], r[1]]); });
+      }
       // Temps bloqué pendant les heures obligatoires (journée entière : tout l'obligatoire)
       if (c.categorie === 'bloque' || !c.debut) {
         var a = c.debut ? C.toMin(c.debut) : 0, b = c.debut ? (C.toMin(c.fin) > a ? C.toMin(c.fin) : 1440) : 1440;

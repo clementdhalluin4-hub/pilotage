@@ -48,7 +48,7 @@
   var timer = LS.get('pp.timer', null);
   var inter = LS.get('pp.inter', null); // interstice en cours : { label, start, entite }
   var ui = { view: 'aujourdhui', orgDay: today(), dayRef: today(), orgMode: 'jour', filtre: { entite: '', prio: '', statut: 'actives', q: '' }, groupe: 'entite', syncState: cfg ? 'chargement' : 'demo',
-    auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null, why: LS.get('pp.why', []) };
+    auto: {}, fresh: [], undo: null, pick: null, trayOpen: window.innerWidth > 860, focusTri: null };
 
   var ICON = {
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>',
@@ -61,7 +61,7 @@
   function clocheOn(t) { return !!t && (t.cloche === true || String(t.cloche) === '1'); }
 
   function P() { var o = {}; Object.keys(DEFAULT_PARAMS).forEach(function (k) { o[k] = DEFAULT_PARAMS[k]; }); Object.keys(S.parametres || {}).forEach(function (k) { if (S.parametres[k] !== '') o[k] = S.parametres[k]; }); return o; }
-  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); LS.set('pp.why', ui.why || []); }
+  function persist() { LS.set(cfg ? 'pp.cache' : 'pp.demo', S); LS.set('pp.queue', queue); LS.set('pp.timer', timer); LS.set('pp.inter', inter); }
   /* Changement de jour : l'app installée sur l'iPhone reste ouverte des jours en arrière-plan,
      la journée affichée suit donc la vraie date dès que l'on revient dessus. */
   function checkDay() {
@@ -174,6 +174,7 @@
         push('tache', task);
       }
     });
+    migrateWhy();
     triSiri();
     checkRules();
     render();
@@ -211,15 +212,15 @@
     if (opts.silent) return;
     if (placed && (before.jour !== task.jour || before.debut !== task.debut)) {
       var reporte = wasPlaced && before.jour && before.jour < task.jour && before.jour <= today();
-      if (wasPlaced && before.jour && before.jour < task.jour && !opts.noWhy && opts.detail !== 'annulation') queueWhy(task, 'decale');
+      if (wasPlaced && before.jour && before.jour < task.jour && !opts.noWhy && opts.detail !== 'annulation') queueWhy(task, 'decale', before);
       // Décalage de plus de 2 h dans la même journée (hors recalages automatiques)
       else if (wasPlaced && before.jour === task.jour && before.debut && !opts.noWhy && ['annulation', 'recalage après retard', 'suite après coupure'].indexOf(opts.detail) === -1 &&
-        C.toMin(task.debut) - C.toMin(before.debut) > 120) queueWhy(task, 'decale_jour');
+        C.toMin(task.debut) - C.toMin(before.debut) > 120) queueWhy(task, 'decale_jour', before);
       log(task, reporte ? 'reporte' : (wasPlaced ? 'deplace' : 'place'), { detail: opts.detail || '' });
       if (reporte) log(task, 'place', { detail: 'replacée' });
     } else if (!placed && wasPlaced) {
       log(task, 'retire', { detail: 'retirée du planning' });
-      if (!opts.noWhy && opts.detail !== 'annulation' && before.jour <= today()) queueWhy(task, 'retire');
+      if (!opts.noWhy && opts.detail !== 'annulation' && before.jour <= today()) queueWhy(task, 'retire', before);
     } else if (opts.action) {
       log(task, opts.action, { detail: opts.detail || '' });
     }
@@ -435,45 +436,96 @@
 
   /* Pourquoi : quand une tâche est décalée, retirée ou pas faite, une question rapide ; les réponses servent à la planification et à la revue du vendredi */
   var RAISONS = ['Pas eu le temps', 'Imprévu, urgence', 'Pas l\'énergie', 'En attente de quelqu\'un', 'Pas prioritaire finalement', 'Mal estimée', 'Mauvais moment de la journée', 'Oubliée'];
-  function queueWhy(t, kind) {
+  /* Les questions en attente vivent dans le Journal (synchronisé) : une question posée sur le PC
+     reste visible sur l'iPhone et inversement. Une question est close par une raison ou par « Passer ». */
+  function queueWhy(t, kind, orig) {
     if (!C.isWork(t)) return;
-    ui.why = ui.why || [];
-    // Les tâches non faites d'un jour passé sont prêtes tout de suite ; les autres attendent le tri du lendemain matin
-    if (!ui.why.some(function (w) { return w.id === t.id; })) ui.why.push({ id: t.id, kind: kind, jour: kind === 'pasfaite' ? '' : today() });
-    persist();
+    if (pendingWhy().some(function (w) { return w.id === t.id; })) return;
+    orig = orig || {};
+    log(t, 'question', { detail: [kind, orig.jour || t.jour || '', orig.debut || t.debut || ''].join('|') });
+  }
+  function pendingWhy() {
+    var open = {};
+    S.journal.slice().sort(function (x, y) { return String(x.horodatage) < String(y.horodatage) ? -1 : (String(x.horodatage) > String(y.horodatage) ? 1 : 0); }).forEach(function (e) {
+      if (e.action === 'question') {
+        var p = String(e.detail || '').split('|');
+        delete open[e.tache_id];
+        open[e.tache_id] = { id: e.tache_id, kind: p[0] || 'decale', jourOrig: p[1] || '', debutOrig: p[2] || '', pose: String(e.horodatage).slice(0, 10) };
+      } else if ((e.action === 'raison' || e.action === 'question_passee') && open[e.tache_id]) delete open[e.tache_id];
+    });
+    return Object.keys(open).map(function (k) { return open[k]; });
+  }
+  function closeWhy(t, why) { log(t, 'question_passee', { detail: why || '' }); }
+  // Anciennes questions gardées sur un seul appareil : on les verse dans le Journal une fois
+  function migrateWhy() {
+    var old = LS.get('pp.why', []);
+    if (!old || !old.length) return;
+    old.forEach(function (w) { var t = getTask(w.id); if (t) queueWhy(t, w.kind); });
+    LS.set('pp.why', []);
   }
   /* Une seule fenêtre par jour, au moment du tri du matin : après l'humeur de la veille, sur Aujourd'hui ou sur l'Organisation du jour */
-  function whyReady() { var d = today(); return (ui.why || []).filter(function (w) { return !w.jour || w.jour < d; }); }
+  function whyReady() {
+    var d = today();
+    return pendingWhy().filter(function (w) {
+      var t = getTask(w.id);
+      // Questions devenues sans objet : on les ferme sans rien demander
+      if (!t || t.statut === 'Supprimée') { if (t) closeWhy(t, 'supprimée'); return false; }
+      if (w.kind === 'pasfaite' && t.statut === 'Fait') { closeWhy(t, 'faite depuis'); return false; }
+      if (w.kind === 'retire' && t.debut) { closeWhy(t, 'replacée'); return false; }
+      return w.kind === 'pasfaite' || w.pose < d;
+    });
+  }
   function maybeAskWhy() {
-    if (!ui.why || !ui.why.length || $('#sheet').open || drag) return;
+    if ($('#sheet').open || drag) return;
     if (LS.get('pp.whyDay', '') === today()) return;
     if (!(ui.view === 'aujourdhui' || (ui.view === 'organisation' && ui.orgMode === 'jour' && ui.orgDay === today()))) return;
     if (moodYesterdayHtml()) return; // l'humeur de la veille d'abord
     if (ui.undo) { clearTimeout(ui.whyT); ui.whyT = setTimeout(maybeAskWhy, 1200); return; } // laisser le temps d'annuler
-    ui.why = ui.why.filter(function (w) { var t = getTask(w.id); return t && t.statut !== 'Supprimée' && !(w.kind === 'pasfaite' && t.statut === 'Fait') && !(w.kind === 'retire' && t.debut); });
-    persist();
     var list = whyReady().slice(-12);
     if (!list.length) return;
     var kinds = { decale: 'décalée', decale_jour: 'décalée de plus de 2 h', retire: 'retirée du planning', pasfaite: 'pas faite' };
-    var h = '<h2>' + (list.length > 1 ? 'Pourquoi ces tâches ont bougé ?' : 'Pourquoi ?') + '</h2><p class="muted">Ta réponse sert à mieux placer tes journées. Un appui suffit.</p><form data-form="why">';
+    var h = '<h2>' + (list.length > 1 ? 'Pourquoi ces tâches ont bougé ?' : 'Pourquoi ?') + '</h2><p class="muted">Ta réponse sert à mieux placer tes journées. Un appui suffit. Si tu l\'as faite sans la noter, choisis « Fait ».</p><form data-form="why">';
     list.forEach(function (w, i) {
-      var t = getTask(w.id);
-      h += '<div class="why-item"><p class="why-title">« ' + esc(t.titre) + ' » <em>' + kinds[w.kind] + (w.jour ? ', ' + esc(C.shortDate(w.jour)) : '') + '</em></p><div class="chips">' + RAISONS.map(function (r) { return '<label class="chip"><input type="radio" name="r' + i + '" value="' + esc(r) + '">' + esc(r) + '</label>'; }).join('') + '</div>' +
+      var t = getTask(w.id), quand = w.jourOrig ? C.shortDate(w.jourOrig) + (w.debutOrig ? ' à ' + w.debutOrig : '') : '';
+      h += '<div class="why-item"><p class="why-title">« ' + esc(t.titre) + ' » <em>' + kinds[w.kind] + (quand ? ', prévue ' + esc(quand) : '') + '</em></p>' +
+        '<div class="chips why-done"><label class="chip chip-done"><input type="radio" name="r' + i + '" value="__fait">Fait</label><label class="chip chip-done"><input type="radio" name="r' + i + '" value="__suite">Fait, avec une suite</label></div>' +
+        '<div class="chips">' + RAISONS.map(function (r) { return '<label class="chip"><input type="radio" name="r' + i + '" value="' + esc(r) + '">' + esc(r) + '</label>'; }).join('') + '</div>' +
         '<input name="txt' + i + '" class="why-txt" placeholder="En quelques mots (facultatif)" autocomplete="off"><input type="hidden" name="id' + i + '" value="' + esc(t.id) + '"><input type="hidden" name="k' + i + '" value="' + w.kind + '"></div>';
     });
     h += '<input type="hidden" name="n" value="' + list.length + '"><div class="row-actions"><button class="btn primary" type="submit">Enregistrer</button><button class="btn" type="button" data-act="why-skip">Passer</button></div></form>';
-    ui.whyShown = list.map(function (w) { return w.id; });
+    ui.whyShown = list;
     openSheet(h, { noFocus: true });
   }
   function saveWhy(f) {
-    var fd = new FormData(f), n = +fd.get('n'), saved = 0;
+    var fd = new FormData(f), n = +fd.get('n'), saved = 0, suites = [], byId = {};
+    (ui.whyShown || []).forEach(function (w) { byId[w.id] = w; });
     for (var i = 0; i < n; i++) {
-      var t = getTask(String(fd.get('id' + i))), r = String(fd.get('r' + i) || ''), txt = String(fd.get('txt' + i) || '').trim();
-      if (t && (r || txt)) { log(t, 'raison', { detail: [r || 'Autre', txt, fd.get('k' + i)].join(' | ') }); saved++; }
+      var t = getTask(String(fd.get('id' + i))), r = String(fd.get('r' + i) || ''), txt = String(fd.get('txt' + i) || '').trim(), k = fd.get('k' + i);
+      if (!t) continue;
+      if (r === '__fait' || r === '__suite') {
+        var w = byId[t.id] || {}, jo = w.jourOrig || t.jour || today(), deb = w.debutOrig || '';
+        if (jo > today()) { jo = today(); deb = ''; }
+        log(t, 'raison', { detail: ['Fait, pas noté', txt, k].join(' | ') });
+        if (r === '__fait') {
+          var reel = C.num(t.duree_min) || 30;
+          Object.assign(t, { statut: 'Fait', jour: jo, debut: deb, fait_le: jo + 'T' + (deb || '12:00') + ':00', duree_reelle_min: reel, maj_le: nowIso() });
+          push('tache', t); log(t, 'fait', { duree_reelle: reel, detail: 'noté après coup' });
+        } else { ui.suiteJour = ui.suiteJour || {}; ui.suiteJour[t.id] = { jour: jo, debut: deb }; suites.push(t.id); }
+        saved++;
+      } else if (r || txt) { log(t, 'raison', { detail: [r || 'Autre', txt, k].join(' | ') }); saved++; }
+      else closeWhy(t, 'sans réponse');
     }
-    clearWhy(); closeSheet(); if (saved) toast('Merci, c\'est noté');
+    ui.whyShown = []; LS.set('pp.whyDay', today()); persist();
+    closeSheet();
+    if (suites.length) { ui.suiteQ = suites.slice(1); openSuite(getTask(suites[0])); }
+    else if (saved) toast('Merci, c\'est noté');
+    render();
   }
-  function clearWhy() { var shown = ui.whyShown || []; ui.why = (ui.why || []).filter(function (w) { return shown.indexOf(w.id) === -1; }); ui.whyShown = []; LS.set('pp.whyDay', today()); persist(); }
+  function nextSuite() {
+    var id = (ui.suiteQ || []).shift(), t = id && getTask(id);
+    if (t) openSuite(t);
+  }
+  function clearWhy() { (ui.whyShown || []).forEach(function (w) { var t = getTask(w.id); if (t) closeWhy(t, 'passée'); }); ui.whyShown = []; LS.set('pp.whyDay', today()); persist(); }
   // Tâches de basse priorité déjà décalées plusieurs fois : elles restent dans la réserve au lieu d'être reproposées chaque jour, sauf échéance proche
   function lowPrioSlippers(d) {
     var cnt = {}, notPrio = {};
@@ -616,6 +668,11 @@
     } else {
       h += '<p class="tri-empty">' + (freeMin >= 15 ? C.fmtDur(freeMin) + ' de libre.' : 'Journée pleine.') + '</p>';
     }
+    // Heures de travail obligatoires encore libres, mais plus aucune tâche de travail à placer
+    var oblSpans = budget(d).obligSpans || [], freeObl = 0;
+    free.forEach(function (f) { oblSpans.forEach(function (r) { freeObl += Math.max(0, Math.min(f[1], r[1]) - Math.max(f[0], r[0])); }); });
+    if (freeObl >= 15 && !S.taches.some(function (t) { return active(t) && C.isPro(t) && !(t.jour && t.debut); }))
+      h += '<p class="tri-note">Plus aucune tâche de travail à placer. ' + C.fmtDur(freeObl) + ' libres sur tes heures de travail : rien d\'autre ne t\'y est proposé.</p>';
     if (free.length && opts.free !== false) {
       h += '<div class="free"><p class="kicker">Créneaux libres</p><div class="free-list">' + free.map(function (f) {
         return '<button class="fs-chip" data-act="gap" data-day="' + d + '" data-a="' + f[0] + '" data-b="' + f[1] + '"><b>' + C.fromMin(f[0]) + '</b><span>' + C.fromMin(f[1]) + '</span><em>' + C.fmtDur(f[1] - f[0]) + '</em></button>';
@@ -687,9 +744,13 @@
       var dur = C.num(t.duree_min) || 30;
       return '<button class="pick-item' + (dur > room ? ' is-long' : '') + '" data-act="pick" data-id="' + esc(t.id) + '" style="--p:var(--p' + (+t.prio || 3) + ');--e:var(--e-' + (ENT_KEY[t.entite] || 'p') + ')"><i class="pi-p"></i><span class="pi-title">' + esc(t.titre) + (proposedIds.indexOf(t.id) !== -1 ? '<small>proposée</small>' : '') + '</span><span class="pi-ent">' + esc(ENT_SHORT[t.entite] || t.entite) + '</span><span class="pi-dur">' + C.fmtDur(dur) + '</span></button>';
     }
+    // Créneau pendant les heures de travail obligatoires : les tâches hors travail passent à la fin
+    var enTravail = (budget(k.d).obligSpans || []).some(function (r) { return k.a < r[1] && r[0] < k.b; }), hors = [];
+    if (enTravail) { hors = cands.filter(function (t) { return !C.isPro(t); }); cands = cands.filter(function (t) { return C.isPro(t); }); }
     var fit = cands.filter(function (t) { return (C.num(t.duree_min) || 30) <= room; }), long = cands.filter(function (t) { return (C.num(t.duree_min) || 30) > room; });
-    if (!cands.length) return '<p class="empty">' + (k.q ? 'Aucune tâche ne correspond.' : 'Toutes tes tâches sont placées.') + '</p>';
-    return fit.map(item).join('') + (long.length ? '<p class="pick-sub">Plus longues que le créneau</p>' + long.map(item).join('') : '');
+    if (!cands.length && !hors.length) return '<p class="empty">' + (k.q ? 'Aucune tâche ne correspond.' : 'Toutes tes tâches sont placées.') + '</p>';
+    return (cands.length ? '' : '<p class="empty">Plus aucune tâche de travail à placer.</p>') + fit.map(item).join('') + (long.length ? '<p class="pick-sub">Plus longues que le créneau</p>' + long.map(item).join('') : '') +
+      (hors.length ? '<p class="pick-sub">Hors travail, pour après tes heures</p>' + hors.map(item).join('') : '');
   }
   function pickTask(t) {
     var k = ui.pick, dur = C.num(t.duree_min) || 30, debut = C.fromMin(k.a);
@@ -934,7 +995,7 @@
   }
 
   /* Organisation */
-  var H0 = 7, H1 = 21, HPX = 64;
+  var H0 = 0, H1 = 24, HPX = 64; // grille de minuit à minuit
   function viewOrganisation() {
     var d = ui.orgDay;
     var h = '<section class="org-head"><div class="org-bar"><div class="seg" role="tablist"><button role="tab" aria-selected="' + (ui.orgMode === 'jour') + '" data-act="mode" data-mode="jour">Jour</button><button role="tab" aria-selected="' + (ui.orgMode === 'semaine') + '" data-act="mode" data-mode="semaine">Semaine</button></div>';
@@ -1017,28 +1078,31 @@
       if (!t.debut) return;
       var dur = C.num(t.duree_min) || 30;
       var host = im[t.id] && getTask(im[t.id]);
-      var it = { a: C.toMin(t.debut), dur: dur, html: function (top, hgt, st) {
+      var it = { a: C.toMin(t.debut), dur: dur, done: t.statut === 'Fait', html: function (top, hgt, st) {
         return '<div class="slot' + (clash[t.id] ? ' is-clash' : '') + (host ? ' is-inset' : '') + '" data-slot="' + esc(t.id) + '" style="top:' + top + 'px;height:' + hgt + 'px;' + st + '">' + strip(t, { compact: hgt < 46, check: t.statut !== 'Fait', range: true }) + '<div class="resize" data-act="resize" aria-hidden="true"></div></div>';
       } };
       if (host && host.jour === d && host.debut) insets.push(it); else items.push(it);
     });
     items.sort(function (x, y) { return x.a - y.a || y.dur - x.dur; });
-    // Répartition en colonnes par groupe de blocs qui se touchent
+    /* Chaque bloc commence exactement à son heure. Un bloc très court garde une hauteur lisible ;
+       s'il déborde sur le suivant, les deux se partagent la largeur au lieu de décaler les horaires.
+       Une tâche faite se réduit pour laisser la place. */
+    items.forEach(function (it) {
+      it.top = yOf(it.a);
+      it.hgt = Math.max(it.done ? 18 : 24, it.dur / 60 * HPX - 2);
+      it.end = it.top + it.hgt + 2;
+    });
     var groups = [], g = null;
     items.forEach(function (it) {
-      if (!g || it.a >= g.end) { g = { items: [], end: 0, lanes: [] }; groups.push(g); }
-      var lane = 0; while (g.lanes[lane] != null && g.lanes[lane] > it.a) lane++;
-      g.lanes[lane] = it.a + it.dur; it.lane = lane; g.items.push(it); g.end = Math.max(g.end, it.a + it.dur);
+      if (!g || it.top >= g.end) { g = { items: [], end: 0, lanes: [] }; groups.push(g); }
+      var lane = 0; while (g.lanes[lane] != null && g.lanes[lane] > it.top) lane++;
+      g.lanes[lane] = it.end; it.lane = lane; g.items.push(it); g.end = Math.max(g.end, it.end);
     });
-    // Les blocs très courts gardent une hauteur lisible : le suivant se cale juste dessous au lieu d'être recouvert
-    var bottom = [];
     groups.forEach(function (gr) {
       var n = gr.lanes.length;
       gr.items.forEach(function (it) {
-        var key = n > 1 ? it.lane : 0, top = Math.max(yOf(it.a), bottom[key] || -1e9), hgt = Math.max(24, it.dur / 60 * HPX - 2);
         var st = n > 1 ? 'left:calc(' + (it.lane / n * 100) + '% + ' + (it.lane ? 2 : 0) + 'px);width:calc(' + (100 / n) + '% - 2px);right:auto;' : '';
-        h += it.html(top, hgt, st);
-        bottom[key] = top + hgt + 2;
+        h += it.html(it.top, it.hgt, st + (it.done && it.hgt < 30 ? 'z-index:0;' : ''));
       });
     });
     insets.forEach(function (it) { h += it.html(yOf(it.a), Math.max(24, it.dur / 60 * HPX - 2), 'left:46%;right:6px;'); });
@@ -1240,8 +1304,11 @@
     var st = null;
     if (timer && timer.id === t.id) { st = timer.start; timer = null; persist(); }
     var prior = spentOn(t.id);
+    // Faite sans avoir été notée (fenêtre « Pourquoi ») : l'étape reste sur le jour où elle était prévue
+    var orig = (ui.suiteJour || {})[t.id];
+    if (orig) { delete ui.suiteJour[t.id]; t.debut = orig.debut; if (!st && orig.jour < today()) st = new Date(orig.jour + 'T' + (orig.debut || '12:00') + ':00').getTime(); }
     logSeance(t, spent, st);
-    Object.assign(t, { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.round(spent + prior), jour: t.jour || today(), maj_le: nowIso() }); push('tache', t);
+    Object.assign(t, { statut: 'Fait', fait_le: nowIso(), duree_reelle_min: Math.round(spent + prior), jour: (orig && orig.jour) || t.jour || today(), maj_le: nowIso() }); push('tache', t);
     log(t, 'fait', { duree_reelle: Math.round(spent + prior) });
     log(t, 'suite', { detail: 'suite le ' + jour });
     var child = createTask({ titre: String(fd.get('titre') || 'Suite : ' + baseTitle(t)).trim(), entite: t.entite, prio: t.prio, type: t.type,
@@ -1254,6 +1321,7 @@
       render();
     });
     render();
+    nextSuite();
   }
 
   /* Interstices */
@@ -1960,7 +2028,7 @@
     if (del) saveTask(t, { statut: 'Supprimée', jour: '', debut: '' }, { action: 'supprime' });
     else saveTask(t, { jour: '', debut: '', statut: st });
     closeSheet(); closePop();
-    toast(del ? 'Tâche supprimée' : 'Retirée du planning, remise dans la réserve', function () { ui.why = (ui.why || []).filter(function (w) { return w.id !== t.id; }); closeSheet(); saveTask(t, prev, { action: 'modifie', detail: 'annulation' }); render(); });
+    toast(del ? 'Tâche supprimée' : 'Retirée du planning, remise dans la réserve', function () { if (pendingWhy().some(function (w) { return w.id === t.id; })) closeWhy(t, 'annulation'); closeSheet(); saveTask(t, prev, { action: 'modifie', detail: 'annulation' }); render(); });
     render();
   }
   function saveMood(n, withToast, jour, why) {

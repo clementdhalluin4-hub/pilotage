@@ -705,6 +705,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px 18px 28px; outline: none
 .why-txt { margin-top: 8px; width: 100%; }
 .why-txt, .mood-y-why { min-height: 40px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line); background: rgba(255, 255, 255, .04); }
 .why-item .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.why-item .why-done { margin-bottom: 8px; }
+.chip-done { border-color: rgba(61, 245, 166, .45); color: var(--ok); background: rgba(61, 245, 166, .06); }
+.chip-done:has(input:checked) { border-color: var(--ok); color: var(--ok); background: rgba(61, 245, 166, .18); }
 .tri-card { padding: 10px 10px 10px 16px; align-items: stretch; }
 .tri-main { padding: 0; width: 100%; }
 .tri-actions { min-width: 0; }
@@ -865,9 +868,9 @@ body{background:transparent}
 .allday-ev[data-act] { cursor: pointer; }
 .is-cren { cursor: pointer; }
 .ev-block.is-cren, .wev.is-cren, .allday-ev.is-cren { --c: rgba(255,255,255,.5); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 16%, rgba(255,255,255,.03)); color: var(--ink); box-shadow: inset 3px 0 0 var(--c); }
-.is-cat-bloque { --c: #8E8E93; } .is-cat-repos { --c: #64D2FF; } .is-cat-social { --c: #FF6B9A; } .is-cat-sport { --c: #30D158; } .is-cat-perso { --c: #BF9BFF; }
+.is-cat-bloque { --c: #8E8E93; } .is-cat-travail { --c: #9B6BFF; } .is-cat-repos { --c: #64D2FF; } .is-cat-social { --c: #FF6B9A; } .is-cat-sport { --c: #30D158; } .is-cat-perso { --c: #BF9BFF; }
 .ev-block.is-cat-bloque { background: repeating-linear-gradient(135deg, rgba(142,142,147,.22) 0 8px, rgba(142,142,147,.08) 8px 16px); }
-.chip.is-cat-bloque, .chip.is-cat-repos, .chip.is-cat-social, .chip.is-cat-sport, .chip.is-cat-perso { box-shadow: inset 3px 0 0 var(--c); }
+.chip.is-cat-bloque, .chip.is-cat-travail, .chip.is-cat-repos, .chip.is-cat-social, .chip.is-cat-sport, .chip.is-cat-perso { box-shadow: inset 3px 0 0 var(--c); }
 .chip small { color: var(--ink-3); font-family: var(--mono); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .chip-radio { position: relative; }
@@ -993,3 +996,5 @@ body.is-locked main, body.is-locked .top, body.is-locked .nav, body.is-locked #t
   .repas-l { width: 100%; }
   .keypad { grid-template-columns: repeat(3, 72px); gap: 14px 20px; } .key { width: 72px; height: 72px; }
 }
+
+.tri-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03); color: var(--ink-2); font-size: .86rem; }
