@@ -396,6 +396,11 @@
     var add = Math.max(0, Math.min(reste, addMax));
     var allege = opts.humeurVeille != null && +opts.humeurVeille <= 2;
     if (allege) add = add / 2;
+    // Nuit courte ou énergie basse : la charge proposée baisse, l'obligatoire ne bouge pas
+    var nuit = num(opts.nuitMin), en = opts.energie || '', baisse = 0, fatigue = '';
+    if ((nuit !== null && nuit > 0 && nuit < 360) || en === 'fatigue') { baisse = 0.2; fatigue = nuit !== null && nuit > 0 && nuit < 360 ? 'nuit de ' + fmtDur(nuit) : 'énergie basse'; }
+    else if ((nuit !== null && nuit > 0 && nuit < 420) || en === 'moyen') { baisse = 0.1; fatigue = nuit !== null && nuit > 0 && nuit < 420 ? 'nuit de ' + fmtDur(nuit) : 'énergie moyenne'; }
+    if (baisse) { add = Math.max(0, add - baisse * (oblig + add)); allege = true; }
     add = Math.floor(add / 15) * 15;
     var travail = c.travail_oblig + c.travail_add;
     var occupe = travail + coursMin + repas + route + c.revision + c.projets + c.sport + c.social + c.perso + c.interstices;
@@ -403,7 +408,7 @@
       jour: day, workday: workday, cours: cours, weekend: w > 5,
       sommeil: sl.duree, lever: sl.lever, coucher: sl.coucher, eveil: eveil,
       obligatoire: oblig, obligSpans: obl, coursMin: coursMin, coursSpans: coursSpans,
-      conseilAdd: add, conseille: oblig + add, allege: allege,
+      conseilAdd: add, conseille: oblig + add, allege: allege, fatigue: fatigue, baisse: baisse,
       travail: travail, travailOblig: c.travail_oblig, travailAdd: c.travail_add,
       travailFait: fait, travailPrevu: Math.max(0, travail - fait),
       revision: c.revision, cibleRevision: cibleRev, projets: c.projets, cibleProjets: cibleProj,
@@ -413,9 +418,13 @@
     };
   }
 
+  /* Tâches ratées récemment (id → nombre de ratés) : reproposées en priorité */
+  var RATES = {};
+  function setRates(m) { RATES = m || {}; }
   /* Priorité de planification, d'après les Règles du brief */
   function rank(task, today, params) {
     var s = 0, ech = task.echeance || '';
+    if (RATES[task.id]) s -= 400;
     var mots = String((params && params.mots_prioritaires) || '').split(',').map(function (m) { return norm(m.trim()); }).filter(Boolean);
     var late = ech && ech < today;
     var p = +task.prio || 3;
@@ -436,6 +445,9 @@
     var busy = [];
     var md = toMin(params.midi_debut), mf = toMin(params.midi_fin);
     if (md !== null && mf !== null) busy.push([md, mf]);
+    // Repas du soir : TRINITY ne propose rien dessus (placer à la main reste possible)
+    var sd = toMin(params.soir_debut == null ? '19:30' : params.soir_debut), sf = toMin(params.soir_fin == null ? '21:00' : params.soir_fin);
+    if (sd !== null && sf !== null && sf > sd) busy.push([sd, sf]);
     events.forEach(function (e) {
       if (!e.debut) return;
       // Un créneau bloqué sur la journée entière (ex. ventes privées) occupe toute la plage de travail
@@ -625,7 +637,7 @@
     parseQuick: parseQuick, stats: stats, suggestions: suggestions, correctedDuration: correctedDuration,
     capacityFor: capacityFor, dayBudget: dayBudget, ranges: ranges, sleepSpan: sleepSpan, category: category, cascade: cascade,
     PERSO: PERSO, INTERSTICE: INTERSTICE, INTERSTICES: INTERSTICES, isPerso: isPerso, isInterstice: isInterstice, isWork: isWork, isPro: isPro, PRO: PRO, rootId: rootId,
-    freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank,
+    freeSlots: freeSlots, isCoursDay: isCoursDay, proposePlan: proposePlan, rank: rank, setRates: setRates,
     bucketOf: bucketOf, acceptedRule: acceptedRule, num: num, norm: norm,
     assez: assez, observation: observation, ruleStats: ruleStats, ruleEffect: ruleEffect
   };

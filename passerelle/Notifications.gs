@@ -63,8 +63,24 @@ function veilleNotifications() {
     if (m <= nowMin + 1 && m >= nowMin - 15) {
       envoyes[cle] = jour;
       aEnvoyer.push({ type: 'cloche', cible: 'tache:' + c.id, titre: '▲ ' + c.titre + ' · ' + (ENT_COURT[c.entite] || c.entite),
-        corps: c.debut + ' → ' + c.fin + '. C\'est l\'heure, touche pour lancer le chrono.' });
+        corps: c.debut + ' → ' + c.fin + '. Il est l\'heure, viens lancer le chrono.' });
     }
+  });
+
+  // Eau : un rappel par palier (25 % à 11 h, 50 % à 14 h, 75 % à 17 h, 100 % à 20 h), seulement si le compte est en dessous
+  [[11 * 60, 0.25], [14 * 60, 0.5], [17 * 60, 0.75], [20 * 60, 1]].forEach(function (pal) {
+    var cleE = 'eau|' + jour + '|' + pal[0];
+    if (envoyes[cleE] || nowMin < pal[0] || nowMin > pal[0] + 20) return;
+    envoyes[cleE] = jour;
+    var prm = {}; readSheet_('Parametres').forEach(function (r) { prm[r.cle] = String(r.valeur); });
+    var cibleE = Math.max(1, Math.round(+prm.eau_verres || 8)), n = 0;
+    readSheet_('Vie').forEach(function (v) {
+      if (String(v.jour) !== jour) return;
+      if (v.type === 'eau' && String(v.id) === 'eau-' + jour) n += +v.valeur || 0;
+      if (v.type === 'eau_verre') n += +v.valeur || 0;
+    });
+    var attendu = Math.ceil(cibleE * pal[1]);
+    if (n < attendu) aEnvoyer.push({ type: 'eau', cible: 'aujourdhui', titre: 'Un verre d\'eau ?', corps: 'Tu en es à ' + Math.max(0, n) + ' sur ' + cibleE + '. Objectif à cette heure : ' + attendu + '.' });
   });
 
   // Une fois par heure : index des cloches reconstruit et nouvelles questions de la revue du vendredi
@@ -86,7 +102,9 @@ function veilleNotifications() {
 function majCloches_() {
   var jour = Utilities.formatDate(new Date(), NOTIF_TZ, 'yyyy-MM-dd');
   var list = readSheet_('Taches').filter(function (t) {
-    return clocheOn_(t.cloche) && (t.statut === 'À faire' || t.statut === 'En cours') && t.jour && t.debut && t.jour >= jour;
+    // Toutes les tâches placées sonnent à leur heure de début (sauf temps perso et interstices) ; la cloche ajoute les autres
+    var auto = t.type !== 'Temps perso' && t.type !== 'Interstice';
+    return (auto || clocheOn_(t.cloche)) && (t.statut === 'À faire' || t.statut === 'En cours') && t.jour && t.debut && t.jour >= jour;
   }).map(function (t) {
     var a = toMin_(t.debut), dur = +t.duree_min || 30;
     return { id: String(t.id), jour: t.jour, debut: t.debut, fin: fromMin_(a + dur), titre: String(t.titre), entite: String(t.entite || '') };

@@ -998,3 +998,30 @@ body.is-locked main, body.is-locked .top, body.is-locked .nav, body.is-locked #t
 }
 
 .tri-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03); color: var(--ink-2); font-size: .86rem; }
+
+/* Cadran sommeil du matin (inspiré du réglage sommeil de l'iPhone) */
+.sleepdial { text-align: center; }
+.sd-wrap { width: min(280px, 78vw); margin: 4px auto 0; touch-action: none; user-select: none; -webkit-user-select: none; cursor: pointer; }
+.sd-svg { display: block; width: 100%; height: auto; }
+.sd-track { fill: none; stroke: #000; stroke-width: 40; }
+.sd-arc { fill: none; stroke: #34344A; stroke-width: 34; stroke-linecap: round; }
+.sd-tick { stroke: var(--ink-3); stroke-width: 1; }
+.sd-tick.is-maj { stroke: var(--ink-2); stroke-width: 1.6; }
+.sd-num { fill: var(--ink-3); font: 600 12px var(--font); text-anchor: middle; }
+.sd-num.is-main { fill: var(--ink); font-size: 14px; }
+.sd-h circle:first-child { fill: #3A3A4E; stroke: rgba(255,255,255,.25); stroke-width: 1; }
+.sd-h[data-h="bed"] circle:first-child { fill: #3E3F8F; }
+.sd-h[data-h="wake"] circle:first-child { fill: #5B4A1E; }
+.sd-ico { fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sd-times { display: flex; justify-content: space-around; margin-top: 10px; }
+.sd-times div { display: flex; flex-direction: column; align-items: center; }
+.sd-times b { font-size: 1.7rem; font-weight: 700; letter-spacing: -.01em; }
+.sd-l { font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--violet); }
+.sd-s { font-size: .8rem; color: var(--ink-3); }
+.sd-dur { margin: 10px 0 0; font-size: 1.5rem; font-weight: 700; }
+.sd-obj { margin: 2px 0 0; font-size: .88rem; color: var(--ink-2); }
+.sd-obj.is-ok { color: var(--ok); }
+.sd-q { margin: 14px 0 6px; font-size: .85rem; color: var(--ink-2); }
+.sd-en { justify-content: center; }
+.sleepdial .row-actions { justify-content: center; margin-top: 12px; }
+.derail { margin-top: 12px; }

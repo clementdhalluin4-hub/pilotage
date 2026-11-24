@@ -143,7 +143,17 @@
   function vie(id) { return list('vie').filter(function (x) { return x.id === id; })[0] || null; }
   function vieOf(type, day) { return list('vie').filter(function (x) { return x.type === type && x.jour === day; }); }
   function setVie(o) { o.horodatage = T.nowIso(); T.push('vie', o); }
-  function eau(day) { var v = vie('eau-' + day); return v ? num(v.valeur) || 0 : 0; }
+  /* Eau : chaque appui est une ligne à part (+1 ou -1), additionnées pour le jour.
+     Plus de total écrasé : deux appareils ou une page restée ouverte ne font plus perdre de verres.
+     Le jour suivant repart de zéro à minuit. L'ancien total du jour (eau-AAAA-MM-JJ) reste compté. */
+  function eau(day) {
+    var v = vie('eau-' + day), n = v ? num(v.valeur) || 0 : 0;
+    list('vie').forEach(function (x) { if (x.type === 'eau_verre' && x.jour === day) n += num(x.valeur) || 0; });
+    return Math.max(0, n);
+  }
+  /* Paliers du quota : 25 % à 11 h, 50 % à 14 h, 75 % à 17 h, 100 % à 20 h */
+  var EAU_PALIERS = [[11 * 60, 0.25], [14 * 60, 0.5], [17 * 60, 0.75], [20 * 60, 1]];
+  function eauPalier() { var n = T.nowMin(), p = null; EAU_PALIERS.forEach(function (x) { if (n >= x[0]) p = x; }); return p; }
   var REPAS = { equilibre: 'Équilibré', correct: 'Correct', revoir: 'À revoir' };
   var LIEUX = { maison: 'Maison', dehors: 'Dehors', prepare: 'Préparé' };
   function repas(moment, day) { return vie('repas-' + moment + '-' + day); }
@@ -193,10 +203,20 @@
 
   /* ===================== Ma journée ===================== */
   var SHORTCUT = 'shortcuts://run-shortcut?name=' + encodeURIComponent('TRINITY Santé');
-  function eauAttendue() {
-    var n = T.nowMin(), a = 8 * 60, b = 21 * 60;
-    if (n <= a) return 0;
-    return Math.min(cible('eau_verres'), Math.floor((Math.min(n, b) - a) / (b - a) * cible('eau_verres')));
+  function eauAttendue() { var p = eauPalier(); return p ? Math.ceil(cible('eau_verres') * p[1]) : 0; }
+  /* Coucher conseillé ce soir : avancé selon la nuit, l'énergie et la dette des 3 dernières nuits (jamais avant 21 h 30) */
+  function coucherConseil(d) {
+    var sa = sante(d), nuit = sa ? num(sa.sommeil_min) : null, en = energie(d), avance = 0, raison = '';
+    var dette = 0, n = 0;
+    for (var i = 0; i < 3; i++) { var x = sante(C.addDays(d, -i)); if (x && num(x.sommeil_min)) { dette += Math.max(0, 480 - num(x.sommeil_min)); n++; } }
+    if (n === 3 && dette >= 180) { avance = 60; raison = 'dette de sommeil de ' + fmtH(dette) + ' sur 3 nuits'; }
+    else if ((nuit && nuit < 360) || en === 'fatigue') { avance = 45; raison = nuit && nuit < 360 ? 'nuit de ' + fmtH(nuit) : 'énergie basse'; }
+    else if ((nuit && nuit < 420) || en === 'moyen') { avance = 30; raison = nuit && nuit < 420 ? 'nuit de ' + fmtH(nuit) : 'énergie moyenne'; }
+    if (!avance) return null;
+    var base = C.toMin(P().coucher) != null ? C.toMin(P().coucher) : 23 * 60;
+    if (base < 12 * 60) base += 1440;
+    var h = Math.max(21 * 60 + 30, base - avance) % 1440;
+    return { heure: C.fromMin(h), raison: raison };
   }
   function tile(cls, label, value, sub, extra) {
     return '<div class="vtile ' + cls + '"><span class="vtile-l">' + label + '</span><span class="vtile-v">' + value + '</span>' + (sub ? '<span class="vtile-s">' + sub + '</span>' : '') + (extra || '') + '</div>';
@@ -206,7 +226,8 @@
     var sp = sportStreak(), so = social(d);
     var h = '<section class="block vie"><div class="block-head"><h2>Ma journée</h2><button class="link" data-act="v-sante-saisie">Saisir à la main</button></div><div class="vtiles">';
     h += sa && num(sa.sommeil_min)
-      ? tile('', 'Sommeil', fmtH(num(sa.sommeil_min)), (sa.coucher ? 'couché ' + esc(sa.coucher) : '') + (sa.lever ? ', levé ' + esc(sa.lever) : ''))
+      ? tile(coucherConseil(d) ? 'is-due' : '', 'Sommeil', fmtH(num(sa.sommeil_min)), (sa.coucher ? 'couché ' + esc(sa.coucher) : '') + (sa.lever ? ', levé ' + esc(sa.lever) : ''),
+        coucherConseil(d) ? '<span class="vtile-s">' + esc(coucherConseil(d).raison.charAt(0).toUpperCase() + coucherConseil(d).raison.slice(1)) + ' : couche-toi vers ' + coucherConseil(d).heure + ' ce soir pour récupérer.</span>' : '')
       : tile('is-empty', 'Sommeil', 'Pas reçu', '', '<a class="vtile-a" href="' + SHORTCUT + '">Synchroniser Santé</a>');
     var pas = hier && num(hier.pas) !== null ? num(hier.pas) : null;
     h += tile(pas === null ? 'is-empty' : '', 'Pas d\'hier', pas === null ? '—' : pas.toLocaleString('fr-FR'), sa && num(sa.pas) !== null ? num(sa.pas).toLocaleString('fr-FR') + ' aujourd\'hui' : '');
@@ -256,12 +277,94 @@
   /* Rappels légers : un petit message quand l'app est ouverte, jamais une notification sonore */
   function rappelLeger() {
     if (!T.on('journee') || !T.LS.get('pp.rappels_legers', true)) return;
-    var last = T.LS.get('pp.rappel_eau', 0), n = T.nowMin();
-    if (Date.now() - last < 2 * 3600 * 1000 || n < 10 * 60 || n > 21 * 60) return;
-    if (eau(today()) >= eauAttendue() - 1) return;
-    T.LS.set('pp.rappel_eau', Date.now());
+    // Un rappel au plus par palier, seulement si tu es en dessous
+    var p = eauPalier(); if (!p) return;
+    var cle = today() + '|' + p[0];
+    if (T.LS.get('pp.rappel_eau', '') === cle || eau(today()) >= eauAttendue()) return;
+    T.LS.set('pp.rappel_eau', cle);
     setTimeout(function () { T.toast('Un verre d\'eau ? Tu en es à ' + eau(today()) + ' sur ' + cible('eau_verres') + '.'); }, 1200);
   }
+
+
+  /* ===================== Réveil : cadran sommeil et énergie ===================== */
+  /* Chaque matin, tant que la nuit n'est pas saisie à la main, un cadran 24 h (inspiré du réglage
+     sommeil de l'iPhone) : tu fais glisser le lit (coucher) et le réveil, puis tu choisis ton énergie.
+     La carte disparaît une fois validée et revient le lendemain. */
+  var OBJ_SOMMEIL = 8 * 60;
+  var ENERGIE = { forme: 'En forme', moyen: 'Moyen', fatigue: 'Fatigué' };
+  var dial = null; // { day, bed, wake, energie }
+  function energie(day) { var v = vie('energie-' + day); return v ? v.valeur : ''; }
+  function nuitSaisie(day) { var sa = sante(day); return !!(sa && sa.source === 'manuel' && num(sa.sommeil_min) && energie(day)); }
+  function dialState(day) {
+    if (dial && dial.day === day) return dial;
+    var sa = sante(day) || {}, hier = sante(C.addDays(day, -1)) || {};
+    var bed = C.toMin(sa.coucher) != null ? C.toMin(sa.coucher) : (C.toMin(hier.coucher) != null ? C.toMin(hier.coucher) : (C.toMin(P().coucher) != null ? C.toMin(P().coucher) : 22 * 60 + 30));
+    var wake = C.toMin(sa.lever) != null ? C.toMin(sa.lever) : (C.toMin(P().lever) != null ? C.toMin(P().lever) : 6 * 60 + 30);
+    dial = { day: day, bed: bed, wake: wake, energie: energie(day) };
+    return dial;
+  }
+  function dureeNuit(st) { return (st.wake - st.bed + 1440) % 1440; }
+  function pt(min, r) { var a = min / 1440 * 2 * Math.PI; return [130 + r * Math.sin(a), 130 - r * Math.cos(a)]; }
+  function dialSvg(st) {
+    var R = 104, span = dureeNuit(st), a = pt(st.bed, R), b = pt(st.wake, R), big = span > 720 ? 1 : 0;
+    var h = '<svg viewBox="0 0 260 260" class="sd-svg" aria-hidden="true">' +
+      '<circle cx="130" cy="130" r="' + R + '" class="sd-track"/>';
+    if (span) h += '<path d="M' + a[0].toFixed(1) + ' ' + a[1].toFixed(1) + ' A' + R + ' ' + R + ' 0 ' + big + ' 1 ' + b[0].toFixed(1) + ' ' + b[1].toFixed(1) + '" class="sd-arc"/>';
+    for (var m = 0; m < 1440; m += 15) {
+      var maj = m % 120 === 0, p1 = pt(m, 78), p2 = pt(m, maj ? 70 : 74);
+      h += '<line x1="' + p1[0].toFixed(1) + '" y1="' + p1[1].toFixed(1) + '" x2="' + p2[0].toFixed(1) + '" y2="' + p2[1].toFixed(1) + '" class="sd-tick' + (maj ? ' is-maj' : '') + '"/>';
+      if (maj) { var pl = pt(m, 58); h += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" class="sd-num' + (m % 360 === 0 ? ' is-main' : '') + '">' + (m / 60) + '</text>'; }
+    }
+    h += '<g class="sd-h" data-h="bed" transform="translate(' + a[0].toFixed(1) + ',' + a[1].toFixed(1) + ')"><circle r="17"/><path d="M-8 3v-7M-8 0h16v3M-4 -3h12" class="sd-ico"/></g>' +
+      '<g class="sd-h" data-h="wake" transform="translate(' + b[0].toFixed(1) + ',' + b[1].toFixed(1) + ')"><circle r="17"/><circle r="6.5" class="sd-ico"/><path d="M0 -3v3l2 1.5" class="sd-ico"/></g></svg>';
+    return h;
+  }
+  function dialInfo(st) {
+    var span = dureeNuit(st), ok = span >= OBJ_SOMMEIL;
+    return '<div class="sd-times"><div><span class="sd-l">Coucher</span><b>' + C.fromMin(st.bed) + '</b><span class="sd-s">hier soir</span></div>' +
+      '<div><span class="sd-l">Réveil</span><b>' + C.fromMin(st.wake) + '</b><span class="sd-s">ce matin</span></div></div>' +
+      '<p class="sd-dur">' + fmtH(span) + '</p><p class="sd-obj' + (ok ? ' is-ok' : '') + '">' + (ok ? 'Objectif de sommeil atteint.' : 'Il te manque ' + fmtH(OBJ_SOMMEIL - span) + ' sur ton objectif de ' + fmtH(OBJ_SOMMEIL) + '.') + '</p>';
+  }
+  function reveilHtml(d) {
+    if (d !== today() || nuitSaisie(d)) return '';
+    var st = dialState(d);
+    return '<section class="block sleepdial"><div class="block-head"><h2>Ta nuit</h2></div>' +
+      '<div class="sd-wrap" id="sd-wrap">' + dialSvg(st) + '</div><div id="sd-info">' + dialInfo(st) + '</div>' +
+      '<p class="sd-q">Ton énergie ce matin</p><div class="seg-mini sd-en" role="group" aria-label="Énergie">' +
+      Object.keys(ENERGIE).map(function (k) { return '<button data-act="v-energie" data-v="' + k + '" aria-pressed="' + (st.energie === k) + '">' + ENERGIE[k] + '</button>'; }).join('') + '</div>' +
+      '<div class="row-actions"><button class="btn primary" data-act="v-nuit-ok"' + (st.energie ? '' : ' disabled') + '>Valider</button></div></section>';
+  }
+  function bindDial() {
+    var wrap = document.getElementById('sd-wrap'); if (!wrap || wrap.dataset.bound) return;
+    wrap.dataset.bound = '1';
+    var active = null;
+    function minAt(e) {
+      var svg = wrap.querySelector('svg'), r = svg.getBoundingClientRect();
+      var x = (e.clientX - r.left) / r.width * 260 - 130, y = (e.clientY - r.top) / r.height * 260 - 130;
+      var a = Math.atan2(x, -y); if (a < 0) a += 2 * Math.PI;
+      return Math.round(a / (2 * Math.PI) * 1440 / 5) * 5 % 1440;
+    }
+    function redraw() { wrap.innerHTML = dialSvg(dial); var info = document.getElementById('sd-info'); if (info) info.innerHTML = dialInfo(dial); }
+    wrap.addEventListener('pointerdown', function (e) {
+      var g = e.target.closest && e.target.closest('.sd-h');
+      if (!g) { // appui sur l'anneau : la poignée la plus proche vient
+        var m = minAt(e), db = Math.min(Math.abs(m - dial.bed), 1440 - Math.abs(m - dial.bed)), dw = Math.min(Math.abs(m - dial.wake), 1440 - Math.abs(m - dial.wake));
+        active = db <= dw ? 'bed' : 'wake';
+      } else active = g.dataset.h;
+      wrap.setPointerCapture(e.pointerId); e.preventDefault();
+      dial[active] = minAt(e); redraw();
+    });
+    wrap.addEventListener('pointermove', function (e) { if (!active) return; e.preventDefault(); var m = minAt(e); if (m !== dial[active]) { dial[active] = m; redraw(); } });
+    function end() { active = null; }
+    wrap.addEventListener('pointerup', end); wrap.addEventListener('pointercancel', end);
+  }
+  function saveNuit() {
+    var d = today(), st = dialState(d);
+    T.push('sante', { jour: d, coucher: C.fromMin(st.bed), lever: C.fromMin(st.wake), sommeil_min: dureeNuit(st), source: 'manuel', maj_le: T.nowIso() });
+    setVie({ id: 'energie-' + d, jour: d, type: 'energie', valeur: st.energie, lieu: '', prix: '', note: '' });
+    T.toast('Nuit de ' + fmtH(dureeNuit(st)) + ' notée'); T.render();
+  }
+  T.energie = energie;
 
   /* ===================== Bilan du vendredi ===================== */
   function bilanHtml(d) {
@@ -294,7 +397,7 @@
 
   T.hooks.aujourdhuiHaut = function (d) {
     var h = '';
-    if (T.on('journee')) h += journeeHtml(d);
+    if (T.on('journee')) h += reveilHtml(d) + journeeHtml(d);
     h += bilanHtml(d);
     var cr = T.on('creneaux') ? crensOn(d) : [];
     if (cr.length) h += '<section class="block cren-today"><div class="block-head"><h2>Créneaux du jour</h2></div><div class="chip-row">' + cr.map(function (c) {
@@ -302,7 +405,7 @@
     }).join('') + '</div></section>';
     return h;
   };
-  T.hooks.afterRender = function (v) { navLink(); if (v === 'aujourdhui') rappelLeger(); };
+  T.hooks.afterRender = function (v) { navLink(); if (v === 'aujourdhui') { rappelLeger(); bindDial(); } };
   function navLink() {
     var nav = document.querySelector('.nav'); if (!nav) return;
     var a = nav.querySelector('[data-view="progression"]'), on = T.on('progression');
@@ -848,9 +951,11 @@
         var cd = crenById(a.dataset.cid); if (!cd) break;
         cd.statut = 'supprime'; cd.maj_le = T.nowIso(); T.push('creneau', cd); T.closeSheet();
         T.toast('Créneau supprimé', function () { cd.statut = 'actif'; T.push('creneau', cd); T.render(); }); T.render(); break;
+      case 'v-energie': dialState(d).energie = a.dataset.v; T.render(); break;
+      case 'v-nuit-ok': if (dialState(d).energie) saveNuit(); break;
       case 'v-eau':
-        var n = Math.max(0, eau(d) + (+a.dataset.d));
-        setVie({ id: 'eau-' + d, jour: d, type: 'eau', valeur: String(n), lieu: '', prix: '', note: '' }); T.render(); break;
+        if (+a.dataset.d < 0 && eau(d) <= 0) break;
+        setVie({ id: 'eau-' + d + '-' + Date.now().toString(36), jour: d, type: 'eau_verre', valeur: String(+a.dataset.d), lieu: '', prix: '', note: '' }); T.render(); break;
       case 'v-repas':
         var r = repas(a.dataset.m, d) || { id: 'repas-' + a.dataset.m + '-' + d, jour: d, type: 'repas_' + a.dataset.m, lieu: '', prix: '', note: '' };
         r.valeur = r.valeur === a.dataset.v ? '' : a.dataset.v;
